@@ -1,10 +1,8 @@
 # push 到 main（有改到 ios/）就在 GitHub 的 Mac 上打包，上傳到 App Store Connect（TestFlight 內部測試）
 name: TestFlight
 
+# 2026-11-24 起改用 Xcode Cloud（push 到 main 自動打包上傳）；這個只留著手動備用
 on:
-  push:
-    branches: [main]
-    paths: ["ios/**", ".github/workflows/testflight.yml"]
   workflow_dispatch:
 
 concurrency:

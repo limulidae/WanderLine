@@ -11,7 +11,7 @@ settings:
   base:
     DEVELOPMENT_TEAM: 6UFKL7S325
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.1"
+    MARKETING_VERSION: "0.2"
     CURRENT_PROJECT_VERSION: "1"
 targets:
   WanderLine:
