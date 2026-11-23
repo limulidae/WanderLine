@@ -1,4 +1,4 @@
-# XcodeGen：GitHub Actions 的 Mac 上執行 `xcodegen generate` 產生 WanderLine.xcodeproj（不進 git）
+# XcodeGen：Xcode Cloud（ci_scripts/ci_post_clone.sh）或自己的 Mac 上執行 `xcodegen generate` 產生 WanderLine.xcodeproj（不進 git）
 # IDevice.xcframework 也是在打包時才從 jkcoxson/idevice 的 release 下載（不進 git）
 # WanderLineTunnel：App 內建的本機 VPN（Network Extension），兩個 bundle ID 都已在開發者帳號開好 Network Extensions
 name: WanderLine
@@ -87,3 +87,14 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         CODE_SIGN_STYLE: Automatic
         SKIP_INSTALL: YES
+
+# 共用的 scheme（Xcode Cloud 只認得共用 scheme）
+schemes:
+  WanderLine:
+    build:
+      targets:
+        WanderLine: all
+    run:
+      config: Debug
+    archive:
+      config: Release
