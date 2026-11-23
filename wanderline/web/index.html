@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WanderLine</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root { --bg:#fff; --fg:#1d1d1f; --mut:#6e6e73; --line:#e5e5ea; --acc:#0a84ff; --ok:#34c759; --bad:#ff3b30; --chip:#f2f2f7; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1c1c1e; --fg:#f5f5f7; --mut:#98989d; --line:#38383a; --chip:#2c2c2e; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 -apple-system, "Segoe UI", "Microsoft JhengHei", sans-serif; color:var(--fg); background:var(--bg); display:flex; height:100vh; }
+  #map { flex:1; }
+  aside { width:340px; border-left:1px solid var(--line); display:flex; flex-direction:column; overflow:auto; }
+  @media (max-width: 760px) { body { flex-direction:column; } aside { width:auto; height:48vh; border-left:0; border-top:1px solid var(--line); } }
+  section { padding:14px 16px; border-bottom:1px solid var(--line); }
+  h2 { font-size:12px; letter-spacing:.04em; color:var(--mut); margin:0 0 8px; font-weight:600; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; border:0; border-radius:8px; padding:8px 12px; background:var(--chip); color:var(--fg); cursor:pointer; }
+  button.primary { background:var(--acc); color:#fff; }
+  button.danger { background:var(--bad); color:#fff; }
+  button:disabled { opacity:.45; cursor:default; }
+  input[type=text], select { font:inherit; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); width:100%; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--bad); flex:none; }
+  .dot.on { background:var(--ok); }
+  .mut { color:var(--mut); font-size:13px; }
+  .err { color:var(--bad); font-size:13px; white-space:pre-wrap; }
+  .tabs { display:flex; gap:4px; background:var(--chip); padding:3px; border-radius:9px; }
+  .tabs button { flex:1; padding:6px; background:transparent; }
+  .tabs button.on { background:var(--bg); box-shadow:0 1px 2px rgba(0,0,0,.15); }
+  #results div { padding:6px 4px; border-bottom:1px solid var(--line); cursor:pointer; font-size:13px; }
+  #results div:hover { background:var(--chip); }
+  label.chk { display:flex; gap:6px; align-items:center; }
+  .bar { height:6px; background:var(--chip); border-radius:3px; overflow:hidden; margin-top:6px; }
+  .bar i { display:block; height:100%; background:var(--acc); width:0; }
+  .me { width:18px; height:18px; border-radius:50%; background:var(--acc); border:3px solid #fff; box-shadow:0 0 0 2px rgba(10,132,255,.35), 0 1px 4px rgba(0,0,0,.4); }
+  .hide { display:none !important; }
+  kbd { background:var(--chip); border-radius:4px; padding:0 5px; font-size:12px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<aside>
+  <section>
+    <div class="row"><span id="dot" class="dot"></span><b id="devname">還沒連線</b></div>
+    <div id="devinfo" class="mut">接上 iPhone、解鎖，按「連線」</div>
+    <div class="row" style="margin-top:8px">
+      <button id="connect" class="primary">連線</button>
+      <button id="restore">還原真實位置</button>
+    </div>
+    <div id="err" class="err"></div>
+  </section>
+
+  <section>
+    <h2>搜尋地點</h2>
+    <div class="row"><input id="q" type="text" placeholder="地址、店名、座標（25.03, 121.56）"></div>
+    <div id="results"></div>
+  </section>
+
+  <section>
+    <div class="tabs"><button data-tab="point" class="on">定點</button><button data-tab="route">路線</button></div>
+  </section>
+
+  <section id="tab-point">
+    <div class="mut">點地圖選一個位置，再按「移到這裡」。<br>移過去以後可以用 <kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> 或 <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 慢慢走（速度用下面路線的設定）。</div>
+    <div id="pick" class="mut" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:8px"><button id="go" class="primary" disabled>移到這裡</button></div>
+  </section>
+
+  <section id="tab-route" class="hide">
+    <div class="mut">在地圖上依序點路線經過的地方（點標記可拖動、右鍵刪除）。</div>
+    <div class="row" style="margin-top:8px">
+      <label class="chk"><input id="snap" type="checkbox" checked>沿著街道走</label>
+      <button id="undo">復原一點</button><button id="clearRoute">清空</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span>速度</span><input id="speed" type="range" min="1" max="20" step="0.5" value="4.5" style="flex:1"><b id="speedv">4.5</b><span class="mut">km/h</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <select id="mode" style="width:auto"><option value="once">走一次</option><option value="loop">繞圈</option><option value="back">來回走</option></select>
+      <label class="chk"><input id="jitter" type="checkbox" checked>左右晃一點</label>
+    </div>
+    <div id="routeinfo" class="mut" style="margin-top:6px"></div>
+    <div class="row" style="margin-top:8px">
+      <button id="walk" class="primary" disabled>開始走</button>
+      <button id="pause" disabled>暫停</button>
+      <button id="stopw" class="danger" disabled>停止</button>
+    </div>
+    <div class="bar"><i id="prog"></i></div>
+    <div id="walkinfo" class="mut"></div>
+    <div class="row" style="margin-top:10px">
+      <button id="gpxBtn">匯入 GPX</button><input id="gpx" type="file" accept=".gpx" class="hide">
+      <button id="saveBtn">存這條</button>
+      <select id="saved" style="flex:1"><option value="">存過的路線…</option></select>
+    </div>
+  </section>
+</aside>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+                set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+
+const start = store.get('view', [25.0418, 121.5654, 16]);
+const map = L.map('map', { zoomControl: true }).setView([start[0], start[1]], start[2]);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+map.on('moveend', () => { const c = map.getCenter(); store.set('view', [c.lat, c.lng, map.getZoom()]); });
+
+const meIcon = L.divIcon({ className: '', html: '<div class="me"></div>', iconSize: [18, 18], iconAnchor: [9, 9] });
+let me = null, pickMarker = null, tab = 'point';
+let pts = [], markers = [], snapped = null, fixedLabel = null, line = L.polyline([], { color: '#0a84ff', weight: 5, opacity: .8 }).addTo(map);
+let rawLine = L.polyline([], { color: '#0a84ff', weight: 2, dashArray: '4 6', opacity: .6 }).addTo(map);
+
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || j.detail || r.statusText);
+  return j;
+}
+function showErr(e) { $('err').textContent = e ? (e.message || e) : ''; }
+async function run(fn) { showErr(''); try { return await fn(); } catch (e) { showErr(e); } }
+
+// ── 連線、狀態 ──
+$('connect').onclick = () => run(async () => {
+  $('connect').disabled = true; $('devinfo').textContent = '連線中…第一次會下載開發者映像檔，要等一下';
+  try { await api('/api/connect', {}); } finally { $('connect').disabled = false; }
+  await poll();
+});
+$('restore').onclick = () => run(async () => { await api('/api/clear', {}); await poll(); });
+
+let lastPos = null;
+async function poll() {
+  let s; try { s = await api('/api/status'); } catch { return; }
+  $('dot').classList.toggle('on', s.connected);
+  $('devname').textContent = s.device ? s.device.name : '還沒連線';
+  $('devinfo').textContent = s.device ? `iOS ${s.device.ios}・${s.connected ? '已連線' : '已斷線，按「連線」'}` : '接上 iPhone、解鎖，按「連線」';
+  $('connect').textContent = s.connected ? '重新連線' : '連線';
+  lastPos = s.position;
+  if (s.position) { if (!me) me = L.marker(s.position, { icon: meIcon, zIndexOffset: 1000 }).addTo(map); else me.setLatLng(s.position); }
+  else if (me) { me.remove(); me = null; }
+  const w = s.walk || {};
+  $('walk').disabled = currentPath().length < 2;
+  $('pause').disabled = $('stopw').disabled = !w.running;
+  $('pause').textContent = w.paused ? '繼續' : '暫停';
+  $('prog').style.width = w.total_m ? `${Math.min(100, 100 * (w.done_m || 0) / w.total_m)}%` : (w.finished ? '100%' : '0');
+  $('walkinfo').textContent = w.running ? `${w.paused ? '暫停中' : '走路中'}・${km(w.done_m)} / ${km(w.total_m)}${w.lap ? `・第 ${w.lap + 1} 圈` : ''}`
+    : w.finished ? `走完了（${km(w.total_m)}），停在終點` : w.error ? `停下來了：${w.error}` : '';
+}
+setInterval(poll, 1000); poll();
+const km = m => m >= 1000 ? `${(m / 1000).toFixed(2)} 公里` : `${Math.round(m || 0)} 公尺`;
+
+// ── 搜尋 ──
+let searchT;
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+$('q').addEventListener('input', () => { clearTimeout(searchT); searchT = setTimeout(doSearch, 700); });
+async function doSearch() {
+  const q = $('q').value.trim(); $('results').innerHTML = '';
+  if (!q) return;
+  const m = q.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (m) { choose(+m[1], +m[2]); return; }
+  const r = await run(() => api('/api/search?q=' + encodeURIComponent(q)));
+  for (const x of r || []) {
+    const d = document.createElement('div'); d.textContent = x.name; d.onclick = () => choose(x.lat, x.lng); $('results').appendChild(d);
+  }
+}
+function choose(lat, lng) { map.setView([lat, lng], 17); $('results').innerHTML = ''; if (tab === 'point') pick(lat, lng); }
+
+// ── 定點 ──
+function pick(lat, lng) {
+  if (!pickMarker) pickMarker = L.marker([lat, lng], { draggable: true }).addTo(map).on('dragend', e => pick(e.target.getLatLng().lat, e.target.getLatLng().lng));
+  pickMarker.setLatLng([lat, lng]);
+  $('pick').textContent = `${lat.toFixed(6)}, ${lng.toFixed(6)}`; $('go').disabled = false;
+}
+$('go').onclick = () => run(async () => { const p = pickMarker.getLatLng(); await api('/api/set', { lat: p.lat, lng: p.lng }); await poll(); });
+
+// 方向鍵走路
+const keys = new Set();
+document.addEventListener('keydown', e => { if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return; const k = keyDir(e.key); if (k) { keys.add(k); e.preventDefault(); } });
+document.addEventListener('keyup', e => keys.delete(keyDir(e.key)));
+function keyDir(k) { return { ArrowUp: 'n', w: 'n', W: 'n', ArrowDown: 's', s: 's', S: 's', ArrowLeft: 'w', a: 'w', A: 'w', ArrowRight: 'e', d: 'e', D: 'e' }[k]; }
+setInterval(async () => {
+  if (!keys.size || !lastPos) return;
+  const step = (+$('speed').value / 3.6) * 0.5; // 每 0.5 秒
+  let dn = 0, de = 0; if (keys.has('n')) dn++; if (keys.has('s')) dn--; if (keys.has('e')) de++; if (keys.has('w')) de--;
+  const len = Math.hypot(dn, de); if (!len) return;
+  const lat = lastPos[0] + (dn / len) * step / 111320, lng = lastPos[1] + (de / len) * step / (111320 * Math.cos(lastPos[0] * Math.PI / 180));
+  lastPos = [lat, lng]; if (me) me.setLatLng(lastPos);
+  try { await api('/api/nudge', { lat, lng }); } catch (e) { showErr(e); }
+}, 500);
+
+// ── 路線 ──
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  tab = b.dataset.tab; document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  $('tab-point').classList.toggle('hide', tab !== 'point'); $('tab-route').classList.toggle('hide', tab !== 'route');
+  if (pickMarker) { if (tab === 'point') pickMarker.addTo(map); else pickMarker.remove(); }
+});
+map.on('click', e => { if (tab === 'point') pick(e.latlng.lat, e.latlng.lng); else { pts.push([e.latlng.lat, e.latlng.lng]); redraw(); } });
+
+function redraw(skipSnap) {
+  markers.forEach(m => m.remove());
+  markers = pts.map((p, i) => L.marker(p, { draggable: true, icon: L.divIcon({ className: '', iconSize: [22, 22], iconAnchor: [11, 11],
+      html: `<div style="width:22px;height:22px;border-radius:50%;background:${i === 0 ? '#34c759' : i === pts.length - 1 ? '#ff3b30' : '#fff'};color:${i === 0 || i === pts.length - 1 ? '#fff' : '#000'};border:2px solid #0a84ff;font:bold 11px/18px sans-serif;text-align:center">${i + 1}</div>` }) })
+    .addTo(map).on('dragend', e => { pts[i] = [e.target.getLatLng().lat, e.target.getLatLng().lng]; redraw(); })
+    .on('contextmenu', () => { pts.splice(i, 1); redraw(); }));
+  rawLine.setLatLngs(pts);
+  if (!skipSnap) { snapped = null; fixedLabel = null; line.setLatLngs([]); }
+  $('routeinfo').textContent = pts.length < 2 ? '' : `直線距離 ${km(straight(pts))}`;
+  if ($('snap').checked && pts.length >= 2 && !skipSnap) doSnap();
+  else if (!skipSnap && !$('snap').checked) { line.setLatLngs(pts); }
+  poll();
+}
+let snapSeq = 0;
+async function doSnap() {
+  const my = ++snapSeq; $('routeinfo').textContent = '找沿著街道的路…';
+  try {
+    const r = await api('/api/snap', { points: pts });
+    if (my !== snapSeq) return;
+    snapped = r.points; line.setLatLngs(snapped);
+    routeInfo();
+  } catch (e) { if (my === snapSeq) { $('routeinfo').textContent = `${e.message}（改用直線）`; snapped = null; line.setLatLngs(pts); } }
+  poll();
+}
+function currentPath() { return fixedLabel ? snapped : ($('snap').checked && snapped ? snapped : pts); }
+function straight(a) { let d = 0; for (let i = 1; i < a.length; i++) d += map.distance(a[i - 1], a[i]); return d; }
+$('snap').onchange = () => redraw();
+$('undo').onclick = () => { pts.pop(); redraw(); };
+$('clearRoute').onclick = () => { pts = []; redraw(); };
+$('speed').oninput = () => { $('speedv').textContent = $('speed').value; store.set('speed', $('speed').value); routeInfo(); };
+function routeInfo() {
+  const path = currentPath(); if (path.length < 2) return;
+  const m = straight(path), min = Math.max(1, Math.round(m / (+$('speed').value / 3.6) / 60));
+  const what = fixedLabel || ($('snap').checked && snapped ? '沿街道' : '直線');
+  $('routeinfo').textContent = `${what} ${km(m)}・用目前速度約 ${min} 分鐘`;
+}
+$('speed').value = store.get('speed', '4.5'); $('speedv').textContent = $('speed').value;
+$('walk').onclick = () => run(async () => {
+  await api('/api/walk', { points: currentPath(), speed_kmh: +$('speed').value, mode: $('mode').value, jitter_m: $('jitter').checked ? 1.5 : 0 });
+  await poll();
+});
+$('pause').onclick = () => run(async () => { await api('/api/walk/pause', {}); await poll(); });
+$('stopw').onclick = () => run(async () => { await api('/api/walk/stop', {}); await poll(); });
+
+// GPX：整條匯入當成要走的路（不能拖點編輯；在地圖上點新的點就會重新開始畫）
+$('gpxBtn').onclick = () => $('gpx').click();
+$('gpx').onchange = async () => {
+  const f = $('gpx').files[0]; $('gpx').value = ''; if (!f) return;
+  const doc = new DOMParser().parseFromString(await f.text(), 'application/xml');
+  let list = [...doc.getElementsByTagName('trkpt'), ...doc.getElementsByTagName('rtept')];
+  if (!list.length) list = [...doc.getElementsByTagName('wpt')];
+  list = list.map(n => [+n.getAttribute('lat'), +n.getAttribute('lon')]).filter(p => isFinite(p[0]) && isFinite(p[1]));
+  if (list.length < 2) { showErr('GPX 裡找不到路線點'); return; }
+  document.querySelector('[data-tab=route]').click();
+  loadFixed(list, `GPX「${f.name}」`);
+};
+function loadFixed(list, label) {
+  pts = []; redraw(true); snapped = list; line.setLatLngs(list); fixedLabel = label;
+  routeInfo();
+  map.fitBounds(L.latLngBounds(list), { padding: [30, 30] }); poll();
+}
+
+// 存路線（存在這台電腦的瀏覽器裡）
+function refreshSaved() {
+  const s = store.get('routes', {}); $('saved').innerHTML = '<option value="">存過的路線…</option>' +
+    Object.keys(s).map(n => `<option>${n.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</option>`).join('');
+}
+$('saveBtn').onclick = () => {
+  const path = currentPath(); if (path.length < 2) { showErr('先在地圖上點出路線'); return; }
+  const name = prompt('幫這條路線取個名字'); if (!name) return;
+  const s = store.get('routes', {}); s[name] = { path }; store.set('routes', s); refreshSaved();
+};
+$('saved').onchange = () => {
+  const n = $('saved').value, r = store.get('routes', {})[n]; if (!r) return;
+  loadFixed(r.path, `「${n}」`); $('saved').value = '';
+};
+refreshSaved();
+</script>
+</body>
+</html>

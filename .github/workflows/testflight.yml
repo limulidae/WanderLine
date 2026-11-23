@@ -1,0 +1,82 @@
+# push 到 main（有改到 ios/）就在 GitHub 的 Mac 上打包，上傳到 App Store Connect（TestFlight 內部測試）
+name: TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/testflight.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: testflight
+  cancel-in-progress: true
+
+env:
+  IDEVICE_VERSION: v0.1.68
+  HAS_KEY: ${{ secrets.ASC_KEY_P8 != '' }}
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: 工具、idevice 程式庫
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          brew install xcodegen
+          mkdir -p ios/Frameworks /tmp/idv
+          gh release download "$IDEVICE_VERSION" -R jkcoxson/idevice -p "idevice-xcframework-*.zip" -D /tmp/idv
+          unzip -q /tmp/idv/*.zip -d /tmp/idv/x
+          cp -R "$(find /tmp/idv/x -name IDevice.xcframework -type d | head -1)" ios/Frameworks/
+          ls ios/Frameworks/IDevice.xcframework
+
+      - name: App Store Connect 金鑰
+        if: env.HAS_KEY == 'true'
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          mkdir -p ~/asc && printf '%s' "$ASC_KEY_P8" > ~/asc/key.p8
+
+      - name: 產生專案
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: 只編譯（還沒設定 App Store Connect 金鑰時）
+        if: env.HAS_KEY != 'true'
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild build -project WanderLine.xcodeproj -scheme WanderLine -configuration Release             -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO | tail -200
+
+      - name: 打包
+        if: env.HAS_KEY == 'true'
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project WanderLine.xcodeproj -scheme WanderLine -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/WanderLine.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/asc/key.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} | tail -200
+
+      - name: 上傳 TestFlight
+        if: env.HAS_KEY == 'true'
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/WanderLine.xcarchive -exportOptionsPlist ExportOptions.plist -exportPath build/export \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/asc/key.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" | tail -100

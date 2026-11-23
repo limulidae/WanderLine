@@ -1,0 +1,4 @@
+*.bat text eol=crlf
+.github/** text eol=lf
+ios/** text eol=lf
+*.png binary

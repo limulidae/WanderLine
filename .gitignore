@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+ios/Frameworks/
+ios/*.xcodeproj/
+ios/build/
+pairing/
+ios/WanderLine/Info.plist
+ios/Tunnel/Info.plist
+ios/**/*.entitlements
