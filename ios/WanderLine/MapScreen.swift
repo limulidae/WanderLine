@@ -16,8 +16,9 @@ struct MapScreen: View {
     @AppStorage("wobble") private var wobble = true
     @AppStorage("walkMode") private var modeRaw = WalkMode.once.rawValue
 
-    @State private var camera: MapCameraPosition = .region(MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 25.0418, longitude: 121.5654), latitudinalMeters: 1200, longitudinalMeters: 1200))
+    // 一打開先看手機現在的位置；拿不到位置時才用台北
+    @State private var camera: MapCameraPosition = .userLocation(fallback: .region(MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 25.0418, longitude: 121.5654), latitudinalMeters: 1200, longitudinalMeters: 1200)))
     @State private var tab: PanelTab = .point
     @State private var picked: CLLocationCoordinate2D?
     @State private var waypoints: [CLLocationCoordinate2D] = []
@@ -67,6 +68,7 @@ struct MapScreen: View {
     private var map: some View {
         MapReader { proxy in
             Map(position: $camera) {
+                UserAnnotation()
                 if tab == .point, let p = picked {
                     Marker("要去的地方", coordinate: p).tint(.red)
                 }
@@ -87,7 +89,7 @@ struct MapScreen: View {
                     }
                 }
             }
-            .mapControls { MapCompass(); MapScaleView() }
+            .mapControls { MapUserLocationButton(); MapCompass(); MapScaleView() }
             .onTapGesture { pt in
                 guard let c = proxy.convert(pt, from: .local) else { return }
                 results = []
