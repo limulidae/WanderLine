@@ -50,6 +50,7 @@ struct MapScreen: View {
             .padding(.horizontal, 12)
             .padding(.top, 6)
         }
+        .overlay(alignment: .bottomTrailing) { locateButton }
         .safeAreaInset(edge: .bottom) { panel }
         .sheet(isPresented: $showSetup) { SetupScreen() }
         .fileImporter(isPresented: $showGPX, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
@@ -89,7 +90,7 @@ struct MapScreen: View {
                     }
                 }
             }
-            .mapControls { MapUserLocationButton(); MapCompass(); MapScaleView() }
+            .mapControls { MapCompass(); MapScaleView() }
             .onTapGesture { pt in
                 guard let c = proxy.convert(pt, from: .local) else { return }
                 results = []
@@ -102,6 +103,22 @@ struct MapScreen: View {
                 }
             }
         }
+    }
+
+    /// 右下角的圓形按鈕：地圖回到手機目前的位置（在改位置時就是假位置）
+    private var locateButton: some View {
+        Button {
+            withAnimation { camera = .userLocation(fallback: camera) }
+        } label: {
+            Image(systemName: "location.fill")
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 48, height: 48)
+                .background(.regularMaterial, in: Circle())
+                .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+        }
+        .accessibilityLabel("回到目前位置")
+        .padding(.trailing, 14)
+        .padding(.bottom, 10)
     }
 
     private func waypointDot(_ i: Int) -> some View {
@@ -213,8 +230,14 @@ struct MapScreen: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 // 不鎖住：App 被關掉重開後，手機可能還停在假位置，這時也要能按
-                Button("還原真實位置") { Task { await engine.restore() } }
-                    .font(.caption.weight(.semibold))
+                Button { Task { await engine.restore() } } label: {
+                    Label("停止模擬", systemImage: "location.slash.fill")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(.orange)
+                .controlSize(.small)
             }
         }
         .padding(14)
