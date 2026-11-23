@@ -1,0 +1,121 @@
+# 不經過 TestFlight：打包成 Ad Hoc 版（只能裝在帳號裡登記過的手機），放到 GitHub Pages，
+# 手機用 Safari 打開 https://limulidae.github.io/WanderLine/ 按「安裝」就能裝。
+name: 網址安裝版
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: adhoc
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  IDEVICE_VERSION: v0.1.68
+  PAGES_URL: https://limulidae.github.io/WanderLine
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 40
+    environment:
+      name: github-pages
+      url: ${{ env.PAGES_URL }}/
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: 工具、idevice 程式庫
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          brew install xcodegen
+          mkdir -p ios/Frameworks /tmp/idv
+          gh release download "$IDEVICE_VERSION" -R jkcoxson/idevice -p "idevice-xcframework-*.zip" -D /tmp/idv
+          unzip -q /tmp/idv/*.zip -d /tmp/idv/x
+          cp -R "$(find /tmp/idv/x -name IDevice.xcframework -type d | head -1)" ios/Frameworks/
+
+      - name: App Store Connect 金鑰
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: mkdir -p ~/asc && printf '%s' "$ASC_KEY_P8" > ~/asc/key.p8
+
+      - name: 產生專案
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: 打包
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project WanderLine.xcodeproj -scheme WanderLine -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/WanderLine.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/asc/key.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }}0000 | tail -200
+
+      - name: 匯出 Ad Hoc 版
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/WanderLine.xcarchive -exportOptionsPlist ExportOptions-AdHoc.plist -exportPath build/adhoc \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/asc/key.p8 \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}" | tail -100
+          ls -la build/adhoc
+
+      - name: 做安裝網頁
+        run: |
+          mkdir -p site
+          cp ios/build/adhoc/*.ipa site/WanderLine.ipa
+          VERSION=$(/usr/libexec/PlistBuddy -c "Print :ApplicationProperties:CFBundleShortVersionString" ios/build/WanderLine.xcarchive/Info.plist)
+          BUILD=$(/usr/libexec/PlistBuddy -c "Print :ApplicationProperties:CFBundleVersion" ios/build/WanderLine.xcarchive/Info.plist)
+          cat > site/manifest.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>items</key><array><dict>
+            <key>assets</key><array><dict>
+              <key>kind</key><string>software-package</string>
+              <key>url</key><string>${PAGES_URL}/WanderLine.ipa</string>
+            </dict></array>
+            <key>metadata</key><dict>
+              <key>bundle-identifier</key><string>wang.chunchieh.wanderline</string>
+              <key>bundle-version</key><string>${BUILD}</string>
+              <key>kind</key><string>software</string>
+              <key>title</key><string>WanderLine</string>
+            </dict>
+          </dict></array></dict></plist>
+          PLIST
+          sed -i '' 's/^          //' site/manifest.plist
+          cat > site/index.html <<HTML
+          <!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1"><title>安裝 WanderLine</title>
+          <style>body{font:17px -apple-system,sans-serif;margin:0;padding:40px 20px;text-align:center;background:#f2f2f7;color:#111}
+          @media (prefers-color-scheme:dark){body{background:#000;color:#eee}}
+          a.btn{display:inline-block;margin:24px 0;padding:14px 40px;border-radius:14px;background:#0a84ff;color:#fff;text-decoration:none;font-weight:600}
+          p{color:#888;font-size:14px;max-width:420px;margin:8px auto}</style></head><body>
+          <h1>WanderLine</h1><p>版本 ${VERSION} (${BUILD})</p>
+          <a class="btn" href="itms-services://?action=download-manifest&amp;url=${PAGES_URL}/manifest.plist">安裝</a>
+          <p>用 Safari 打開這頁再按「安裝」。只有登記過的 iPhone 能裝，而且要先打開「設定 → 隱私權與安全性 → 開發者模式」。</p>
+          </body></html>
+          HTML
+          sed -i '' 's/^          //' site/index.html
+          ls -la site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - uses: actions/deploy-pages@v4
