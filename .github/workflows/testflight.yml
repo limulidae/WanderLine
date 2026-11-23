@@ -17,7 +17,7 @@ env:
 
 jobs:
   build:
-    runs-on: xcode-27  # GitHub 的 Mac 映像檔，內建 Xcode 27（蘋果 2027 年 4 月起要求 iOS 27 SDK）
+    runs-on: macos-26  # Xcode 26.6；蘋果 2027 年 4 月起要求 iOS 27 SDK，GitHub 的 xcode-27 正式版出來再換（試用版常排隊很久）
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
