@@ -17,7 +17,8 @@
 
 打包流程：
 - push 到 main 時，Xcode Cloud（workflow「TestFlight」）會跑 `ios/ci_scripts/ci_post_clone.sh`：裝 XcodeGen、下載 idevice 程式庫、產生專案，再打包上傳到 TestFlight 內部測試。簽名由蘋果代管。
-- 備用：GitHub Actions 的 `.github/workflows/testflight.yml`（手動觸發），以及「網址安裝版」`.github/workflows/adhoc.yml`（Ad Hoc 版放到 https://limulidae.github.io/WanderLine/ ，只能裝在帳號登記過的手機）。兩個都要 repo secrets：`ASC_KEY_P8`、`ASC_KEY_ID`、`ASC_ISSUER_ID`。GitHub 的 Mac 每次打包都會新開一張開發用憑證，**不要撤銷這些憑證**。
+- TestFlight 只走 Xcode Cloud（GitHub 的 TestFlight 打包已在 2026-11-24 移除）。
+- 暫時保留「網址安裝版」`.github/workflows/adhoc.yml`（手動觸發；Ad Hoc 版放到 https://limulidae.github.io/WanderLine/ ，只能裝在帳號登記過的手機），要 repo secrets：`ASC_KEY_P8`、`ASC_KEY_ID`、`ASC_ISSUER_ID`。TestFlight 恢復後就移除。GitHub 的 Mac 每次打包都會新開一張開發用憑證，**不要撤銷任何憑證**。
 - 自己的 Mac：`bash ios/setup_mac.sh` 會產生專案並打開 Xcode。
 
 改位置的方法：
