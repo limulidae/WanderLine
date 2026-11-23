@@ -210,9 +210,9 @@ struct MapScreen: View {
                 Text(engine.position.map { String(format: "目前假位置 %.5f, %.5f", $0.latitude, $0.longitude) } ?? "現在是真實位置")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
+                // 不鎖住：App 被關掉重開後，手機可能還停在假位置，這時也要能按
                 Button("還原真實位置") { Task { await engine.restore() } }
                     .font(.caption.weight(.semibold))
-                    .disabled(engine.position == nil)
             }
         }
         .padding(14)
