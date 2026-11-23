@@ -25,7 +25,11 @@ final class LoopbackVPN: ObservableObject {
     func ensureOn() async throws {
         let m: NETunnelProviderManager
         do {
-            m = try await find() ?? create()
+            if let found = try await find() {
+                m = found
+            } else {
+                m = try await create()
+            }
         } catch {
             installed = false
             throw LinkError(step: "本機 VPN 沒有加入", detail: "系統問「加入 VPN 設定」時要按「允許」（\(error.localizedDescription)）")
