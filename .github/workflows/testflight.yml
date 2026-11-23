@@ -55,6 +55,15 @@ jobs:
           set -o pipefail
           xcodebuild build -project WanderLine.xcodeproj -scheme WanderLine -configuration Release             -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO | tail -200
 
+      - name: 清掉舊的打包用憑證（不然會到上限）
+        if: env.HAS_KEY == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          python3 -m pip install --quiet --break-system-packages cryptography
+          python3 .github/scripts/cleanup_dev_certs.py
+
       - name: 打包
         if: env.HAS_KEY == 'true'
         working-directory: ios
