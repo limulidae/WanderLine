@@ -11,6 +11,10 @@ enum PanelTab: String, CaseIterable, Identifiable {
 struct MapScreen: View {
     @StateObject private var engine = Engine.shared
     @StateObject private var routes = RouteStore.shared
+    @StateObject private var favorites = FavoriteStore.shared
+    @FocusState private var searchFocused: Bool
+    @State private var showFavName = false
+    @State private var favName = ""
     @AppStorage("speedKmh") private var speed = 4.5
     @AppStorage("snapToStreets") private var snapToStreets = true
     @AppStorage("wobble") private var wobble = true
@@ -54,7 +58,11 @@ struct MapScreen: View {
             VStack(spacing: 8) {
                 searchBar
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { searchFrame = $0 }
-                if !results.isEmpty { resultList }
+                if !results.isEmpty {
+                    resultList
+                } else if searchFocused && query.isEmpty && !favorites.items.isEmpty {
+                    favoriteList
+                }
                 if let err = engine.lastError { errorBanner(err) }
             }
             .padding(.horizontal, 12)
@@ -75,6 +83,11 @@ struct MapScreen: View {
         .fileImporter(isPresented: $showGPX, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
             if case .success(let url) = r { importGPX(url) }
         }
+        .alert("收藏這個地點", isPresented: $showFavName) {
+            TextField("名字", text: $favName)
+            Button("收藏") { if let p = picked { favorites.add(name: favName, at: p) } }
+            Button("取消", role: .cancel) {}
+        }
         .alert("幫這條路線取個名字", isPresented: $showSave) {
             TextField("名字", text: $saveName)
             Button("存") { if !saveName.isEmpty { routes.save(name: saveName, path: path) } }
@@ -92,6 +105,17 @@ struct MapScreen: View {
         MapReader { proxy in
             Map(position: $camera) {
                 UserAnnotation()
+                ForEach(favorites.items) { f in
+                    Annotation(f.name, coordinate: f.coordinate) {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                            .frame(width: 22, height: 22)
+                            .background(Circle().fill(Color.yellow))
+                            .overlay(Circle().stroke(.white, lineWidth: 2))
+                            .shadow(radius: 1.5)
+                            .onTapGesture { tab = .point; picked = f.coordinate }
+                    }
+                }
                 if tab == .point, let p = picked {
                     Marker("要去的地方", coordinate: p).tint(.red)
                 }
@@ -220,6 +244,7 @@ struct MapScreen: View {
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("搜尋地點或輸入座標（25.03, 121.56）", text: $query)
+                    .focused($searchFocused)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .submitLabel(.search)
@@ -231,6 +256,43 @@ struct MapScreen: View {
             .padding(10)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         }
+    }
+
+    /// 點搜尋列（還沒打字）時列出收藏；按一下就跳過去並選好那個點，長按可刪除
+    private var favoriteList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("收藏").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(favorites.items) { f in
+                        Button {
+                            searchFocused = false
+                            tab = .point
+                            goAfterKeyboard(f.coordinate)
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "star.fill").foregroundStyle(.yellow)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(f.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                                    Text(String(format: "%.5f, %.5f", f.lat, f.lon)).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.vertical, 8).padding(.horizontal, 12)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("刪除收藏", systemImage: "trash", role: .destructive) { favorites.remove(f) }
+                        }
+                        Divider()
+                    }
+                }
+            }
+            .frame(maxHeight: 280)
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var resultList: some View {
@@ -290,6 +352,15 @@ struct MapScreen: View {
     private func goAfterKeyboard(_ c: CLLocationCoordinate2D) {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { go(to: c) }
+    }
+
+    /// 先跳出取名字的視窗，同時去查附近的地名填進去（查到之前使用者已經開始打字就不蓋掉）
+    private func askFavoriteName(for c: CLLocationCoordinate2D) {
+        favName = ""
+        showFavName = true
+        Task {
+            if let n = await FavoriteStore.suggestName(for: c), favName.isEmpty { favName = n }
+        }
     }
 
     private func go(to c: CLLocationCoordinate2D) {
@@ -377,9 +448,27 @@ struct MapScreen: View {
 
     private var pointPanel: some View {
         VStack(spacing: 10) {
-            Text(picked.map { String(format: "%.6f, %.6f", $0.latitude, $0.longitude) } ?? "點地圖選一個地方")
-                .font(.footnote).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                if let p = picked, let f = favorites.find(p) {
+                    Text(f.name).font(.footnote.weight(.semibold)).lineLimit(1)
+                }
+                Text(picked.map { String(format: "%.6f, %.6f", $0.latitude, $0.longitude) } ?? "點地圖選一個地方")
+                    .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                // 收藏：空心星 = 還沒收藏，按了取名字存起來；實心星 = 已收藏，按了取消收藏
+                if let p = picked {
+                    let saved = favorites.find(p)
+                    Button {
+                        if let saved { favorites.remove(saved) } else { askFavoriteName(for: p) }
+                    } label: {
+                        Image(systemName: saved == nil ? "star" : "star.fill")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(saved == nil ? Color.secondary : Color.yellow)
+                            .frame(width: 36, height: 30)
+                    }
+                    .accessibilityLabel(saved == nil ? "收藏這個地點" : "取消收藏")
+                }
+            }
             HStack(alignment: .center, spacing: 14) {
                 Button {
                     if let p = picked { Task { await engine.teleport(to: p) } }
