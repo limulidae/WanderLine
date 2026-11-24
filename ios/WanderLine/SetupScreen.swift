@@ -1,3 +1,4 @@
+import CoreLocation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -6,6 +7,7 @@ struct SetupScreen: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var pairing = PairingHost.shared
     @ObservedObject private var vpn = LoopbackVPN.shared
+    @StateObject private var location = LocationAuth()
 
     @State private var hasPairing = PairingStore.exists
     @State private var ddiReady = DiskImage.ready
@@ -19,7 +21,8 @@ struct SetupScreen: View {
         NavigationStack {
             List {
                 Section {
-                    step(1, "打開「開發者模式」", "設定 → 隱私權與安全性 → 開發者模式，打開後手機會重新開機。", done: false, showStatus: false)
+                    // 開發者模式沒有公開的檢查方法；配對要在「開發者模式」那頁做，配對好了就代表已經打開
+                    step(1, "打開「開發者模式」", hasPairing ? "已經打開了。" : "設定 → 隱私權與安全性 → 開發者模式，打開後手機會重新開機。", done: hasPairing)
                     step(2, "配對這支 iPhone", pairingText, done: hasPairing) { pairingControls }
                     step(3, "加入本機 VPN", "讓 WanderLine 連到這支手機自己的開發者服務。只在手機內部繞一圈，不會連到外面，也不影響上網。系統問「加入 VPN 設定」時按「允許」。", done: vpn.installed == true) {
                         if vpn.installed != true {
@@ -42,9 +45,16 @@ struct SetupScreen: View {
                             }
                         }
                     }
-                    step(5, "允許「永遠」使用位置", "切到別的 App 時，WanderLine 要在背景繼續送位置。系統問的時候先選「使用 App 時」，之後到設定改成「永遠」。", done: false, showStatus: false) {
-                        Button("打開 WanderLine 的設定") {
-                            if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                    step(5, "允許「永遠」使用位置", location.text, done: location.status == .authorizedAlways) {
+                        switch location.status {
+                        case .authorizedAlways:
+                            EmptyView()
+                        case .notDetermined:
+                            Button("允許使用位置") { location.ask() }
+                        default:
+                            Button("打開 WanderLine 的設定") {
+                                if let u = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(u) }
+                            }
                         }
                     }
                 } header: { Text("第一次使用（全部在手機上完成）") }
@@ -232,5 +242,34 @@ struct SetupScreen: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// 位置權限：設定頁第 5 步用，改了權限（從系統設定回來）會自動更新
+@MainActor
+final class LocationAuth: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published private(set) var status: CLAuthorizationStatus
+    private let manager = CLLocationManager()
+
+    override init() {
+        status = manager.authorizationStatus
+        super.init()
+        manager.delegate = self
+    }
+
+    func ask() { manager.requestWhenInUseAuthorization() }
+
+    var text: String {
+        switch status {
+        case .authorizedAlways: return "已經是「永遠」，切到別的 App 時也會繼續送位置。"
+        case .authorizedWhenInUse: return "現在是「使用 App 時」。切到別的 App 時要繼續送位置，請到設定裡改成「永遠」。"
+        case .notDetermined: return "切到別的 App 時，WanderLine 要在背景繼續送位置。先按下面的按鈕允許，之後再到設定改成「永遠」。"
+        default: return "現在不允許使用位置，請到設定裡改成「永遠」。"
+        }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let s = manager.authorizationStatus
+        Task { @MainActor in self.status = s }
     }
 }
