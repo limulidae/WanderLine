@@ -607,7 +607,7 @@ struct MapScreen: View {
                     Button("停止", role: .destructive) { engine.stopWalk() }.buttonStyle(.bordered)
                 } else {
                     Button {
-                        engine.startWalk(path: path, kmh: speed, mode: mode, wobble: wobble)
+                        startWalk()
                     } label: { Label("開始走", systemImage: "figure.walk").frame(maxWidth: .infinity).padding(.vertical, 4) }
                     .buttonStyle(.borderedProminent)
                     .disabled(path.count < 2 || snapping)
@@ -634,6 +634,24 @@ struct MapScreen: View {
     }
 
     // MARK: - 路線
+
+    /// 「繞圈」：終點沒回到起點的話，先找一條從終點沿街道走回起點的路接上，
+    /// 不要從終點直線穿過房子回起點（找不到路才用直線）
+    private func startWalk() {
+        var p = path
+        guard mode == .loop, p.count >= 2, let first = p.first, let last = p.last, Geo.distance(first, last) > 20 else {
+            engine.startWalk(path: p, kmh: speed, mode: mode, wobble: wobble)
+            return
+        }
+        snapping = true
+        Task {
+            if let back = try? await StreetRouter.walk(through: [last, first]), back.count >= 2 {
+                p += back.dropFirst()
+            }
+            snapping = false
+            engine.startWalk(path: p, kmh: speed, mode: mode, wobble: wobble)
+        }
+    }
 
     private func resnap() {
         snapped = nil
