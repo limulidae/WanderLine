@@ -1,6 +1,6 @@
 """把 Xcode Cloud 某次打包產出的 Ad Hoc 版放到 GitHub Pages（gh-pages 分支），手機用 Safari 開就能裝。
 用法：python tools/publish_adhoc.py <ciBuildRun id>（Xcode Cloud 那次打包的 id）"""
-import io, json, pathlib, plistlib, shutil, subprocess, sys, tempfile, time, urllib.request, zipfile
+import io, json, urllib.parse, pathlib, plistlib, shutil, subprocess, sys, tempfile, time, urllib.request, zipfile
 import base64, os
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -43,7 +43,7 @@ d = pathlib.Path(tempfile.mkdtemp())
 a.btn{{display:inline-block;margin:24px 0;padding:14px 40px;border-radius:14px;background:#0a84ff;color:#fff;text-decoration:none;font-weight:600}}
 p{{color:#888;font-size:14px;max-width:420px;margin:8px auto}}</style></head><body>
 <h1>WanderLine</h1><p>版本 {ver} ({build})</p>
-<a class="btn" href="itms-services://?action=download-manifest&amp;url={PAGES}/manifest.plist?v={build}">安裝</a>
+<a class="btn" href="itms-services://?action=download-manifest&amp;url={urllib.parse.quote(f'{PAGES}/manifest.plist?v={build}', safe='')}">安裝</a>
 <p>用 Safari 打開這頁再按「安裝」。只有登記過的 iPhone 能裝，而且要先打開「設定 → 隱私權與安全性 → 開發者模式」。</p>
 </body></html>""", encoding="utf-8")
 (d / ".nojekyll").write_text("")
