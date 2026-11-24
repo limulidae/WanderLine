@@ -23,6 +23,7 @@ struct MapScreen: View {
     @AppStorage("snapToStreets") private var snapToStreets = true
     @AppStorage("wobble") private var wobble = true
     @AppStorage("walkMode") private var modeRaw = WalkMode.once.rawValue
+    @AppStorage("panelCollapsed") private var collapsed = false   // 下面的面板往下縮成一條
 
     // 一打開先看手機現在的位置；拿不到位置時才用台北
     @State private var camera: MapCameraPosition = .userLocation(fallback: .region(MKCoordinateRegion(
@@ -464,19 +465,58 @@ struct MapScreen: View {
 
     // MARK: - 下方面板
 
+    /// 下面的面板：上方的小橫條點一下或往下滑就縮成一條，再點一下或往上滑展開
     private var panel: some View {
         VStack(spacing: 10) {
-            Picker("", selection: $tab) {
-                ForEach(PanelTab.allCases) { Text($0.label).tag($0) }
+            Button { withAnimation(.snappy) { collapsed.toggle() } } label: {
+                Capsule().fill(Color.secondary.opacity(0.45)).frame(width: 40, height: 5)
+                    .frame(maxWidth: .infinity).padding(.top, -6).padding(.bottom, collapsed ? 0 : -4)
+                    .contentShape(Rectangle())
             }
-            .pickerStyle(.segmented)
+            .buttonStyle(.plain)
+            .accessibilityLabel(collapsed ? "展開面板" : "縮起面板")
 
-            if tab == .point { pointPanel } else { routePanel }
+            if collapsed {
+                collapsedBar
+            } else {
+                Picker("", selection: $tab) {
+                    ForEach(PanelTab.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+
+                if tab == .point { pointPanel } else { routePanel }
+            }
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .gesture(DragGesture(minimumDistance: 15).onEnded { g in
+            if g.translation.height > 30 && !collapsed { withAnimation(.snappy) { collapsed = true } }
+            if g.translation.height < -30 && collapsed { withAnimation(.snappy) { collapsed = false } }
+        })
         .padding(.horizontal, 10)
         .padding(.bottom, 4)
+    }
+
+    /// 縮起來時只剩一行：現在在做什麼，點一下展開
+    private var collapsedBar: some View {
+        Button { withAnimation(.snappy) { collapsed = false } } label: {
+            HStack(spacing: 10) {
+                Image(systemName: engine.walking ? "figure.walk" : (tab == .point ? "mappin.and.ellipse" : "point.topleft.down.to.point.bottomright.curvepath"))
+                    .foregroundStyle(.blue)
+                Text(collapsedText).font(.subheadline).lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up").font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var collapsedText: String {
+        if engine.walking || engine.finished { return walkInfo }
+        if tab == .route { return path.count >= 2 ? "路線：" + routeInfo : "路線" }
+        if let p = picked, let f = favorites.find(p) { return "定點：" + f.name }
+        return picked.map { String(format: "定點：%.5f, %.5f", $0.latitude, $0.longitude) } ?? "定點"
     }
 
     private var pointPanel: some View {
