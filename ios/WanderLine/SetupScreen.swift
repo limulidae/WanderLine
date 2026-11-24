@@ -7,7 +7,7 @@ struct SetupScreen: View {
     @ObservedObject private var pairing = PairingHost.shared
     @ObservedObject private var vpn = LoopbackVPN.shared
 
-    @State private var hasPairing = PairingStore.exists
+    @State private var hasPairing = (PairingStore.exists || LockdownStore.exists)
     @State private var ddiReady = DiskImage.ready
     @State private var ddiProgress: Double?
     @State private var vpnBusy = false
@@ -76,16 +76,17 @@ struct SetupScreen: View {
                 }
 
                 Section {
-                    Button("匯入配對檔") { importing = true }
+                    Button("匯入電腦配對檔（出門沒 Wi-Fi 也能用）") { importing = true }
                     if hasPairing {
                         Button("刪除配對檔", role: .destructive) {
                             PairingStore.remove()
+                            LockdownStore.remove()
                             hasPairing = false
                             pairing.reset()
                         }
                     }
                 } header: { Text("其他") } footer: {
-                    Text("iOS 26 以下不能在手機上配對：用電腦的 idevice_pair 產生 RPPairing 配對檔，再從這裡匯入。")
+                    Text("手機上配對的方式只在 Wi-Fi 下能用。要在 4G/5G 也能改位置，在 Mac 上跑一次 WanderLine 的 ios/make_pairing_mac.sh，把產生的配對檔用 AirDrop 傳到手機，再從這裡匯入。")
                 }
 
                 Section {} footer: {
@@ -99,17 +100,16 @@ struct SetupScreen: View {
             .fileImporter(isPresented: $importing, allowedContentTypes: [.propertyList, .xml, .data, .item]) { r in
                 if case .success(let url) = r {
                     do {
-                        try PairingStore.save(from: url)
-                        message = (true, "已匯入配對檔")
+                        message = (true, try PairingStore.save(from: url))
                     } catch {
                         message = (false, error.localizedDescription)
                     }
-                    hasPairing = PairingStore.exists
+                    hasPairing = (PairingStore.exists || LockdownStore.exists)
                 }
             }
             .task { await vpn.refresh() }
             .onChange(of: pairing.phase) { _, phase in
-                if phase == .done { hasPairing = PairingStore.exists }
+                if phase == .done { hasPairing = (PairingStore.exists || LockdownStore.exists) }
             }
         }
     }
@@ -130,7 +130,7 @@ struct SetupScreen: View {
 
     private var pairingText: String {
         guard canPairOnPhone else {
-            return "這支手機的 iOS 版本不能在手機上配對，請用最下面的「匯入配對檔」。"
+            return "這支手機的 iOS 版本不能在手機上配對，請用最下面的「匯入電腦配對檔」。"
         }
         switch pairing.phase {
         case .idle, .failed:

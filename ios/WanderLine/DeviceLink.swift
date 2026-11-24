@@ -1,5 +1,8 @@
 // 用 idevice 從 iPhone 連回自己，開 DVT 的 LocationSimulation 改位置。
-// 路徑：本機 VPN（10.7.0.1）→ RPPairing 配對檔建立開發者通道 → 沒掛開發者映像檔就自動掛 → RemoteServer → LocationSimulation
+// 兩條路，都經過本機 VPN（10.7.0.1）連回手機自己：
+//  1. 電腦配對檔（lockdown，像 LocationLab 的 LL Pair）→ lockdownd（62078 埠，4G 也開著）→ CoreDeviceProxy 建通道。優先用。
+//  2. 手機上配對的 RPPairing 配對檔 → 「遠端配對」服務（只開在 Wi-Fi 上）建通道。
+// 之後一樣：沒掛開發者映像檔就自動掛 → RemoteServer → LocationSimulation
 import Foundation
 import Network
 import Security
@@ -17,6 +20,7 @@ final class DeviceLink {
     static let targetIP = "10.7.0.1"
 
     private let queue = DispatchQueue(label: "wanderline.link", qos: .userInitiated)
+    private var provider: OpaquePointer?   // 走電腦配對檔時的 lockdown 連線
     private var adapter: OpaquePointer?
     private var handshake: OpaquePointer?
     private var server: OpaquePointer?
@@ -71,8 +75,8 @@ final class DeviceLink {
 
     /// 需要等使用者或網路的準備工作（不在 idevice 佇列上做）
     private func prepare() async throws {
-        guard PairingStore.exists else {
-            throw LinkError(step: "還沒配對", detail: "到「設定」按「開始配對」")
+        guard PairingStore.exists || LockdownStore.exists else {
+            throw LinkError(step: "還沒配對", detail: "到「設定」按「開始配對」，或匯入電腦配對檔")
         }
         try await LoopbackVPN.shared.ensureOn()
         if !DiskImage.ready {
@@ -105,7 +109,8 @@ final class DeviceLink {
         if let server { remote_server_free(server) }
         if let handshake { rsd_handshake_free(handshake) }
         if let adapter { adapter_free(adapter) }
-        sim = nil; server = nil; handshake = nil; adapter = nil
+        if let provider { idevice_provider_free(provider) }
+        sim = nil; server = nil; handshake = nil; adapter = nil; provider = nil
     }
 
     /// Wi-Fi（en0）有沒有 IPv4 位址
@@ -125,6 +130,69 @@ final class DeviceLink {
     }
 
     private func connect() throws {
+        var lockdownError: LinkError?
+        if let data = LockdownStore.load() {
+            do { try openViaLockdown(data) } catch let e as LinkError { lockdownError = e; drop() }
+        }
+        if adapter == nil {
+            guard PairingStore.exists else {
+                throw lockdownError ?? LinkError(step: "還沒配對", detail: "到「設定」按「開始配對」")
+            }
+            do { try openViaRPPairing() } catch let e as LinkError {
+                // 兩條都失敗：電腦配對檔的錯誤比較有參考價值（它在 4G 也該通）
+                if let l = lockdownError { throw LinkError(step: l.step, detail: "\(l.detail)；手機配對也失敗：\(e.step)") }
+                throw e
+            }
+        }
+
+        try ensureMounted()
+
+        if let e = check(remote_server_connect_rsd(adapter, handshake, &server)) {
+            drop()
+            throw LinkError(step: "開發者服務打不開（「開發者模式」有打開嗎？）", detail: e)
+        }
+        if let e = check(location_simulation_new(server, &sim)) {
+            drop()
+            throw LinkError(step: "改位置服務打不開", detail: e)
+        }
+    }
+
+    /// 電腦配對檔：lockdownd（62078）→ CoreDeviceProxy → 軟體通道。4G 也能用。
+    private func openViaLockdown(_ data: Data) throws {
+        var pf: OpaquePointer?
+        let parseErr = data.withUnsafeBytes { raw in
+            idevice_pairing_file_from_bytes(raw.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &pf)
+        }
+        if let e = check(parseErr) { throw LinkError(step: "電腦配對檔讀不懂，請重新產生", detail: e) }
+
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = in_port_t(62078).bigEndian
+        _ = DeviceLink.targetIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+
+        var newProvider: OpaquePointer?
+        // pf 交給 provider，之後不能再用
+        let provErr = withUnsafePointer(to: &addr) { p in
+            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                idevice_tcp_provider_new(sa, pf, "WanderLine", &newProvider)
+            }
+        }
+        if let e = check(provErr) { throw LinkError(step: "電腦配對檔無法使用", detail: e) }
+        provider = newProvider
+
+        var newAdapter: OpaquePointer?
+        var newHandshake: OpaquePointer?
+        let tunnelErr = tunnel_create_usb(provider, &newAdapter, &newHandshake)
+        adapter = newAdapter
+        handshake = newHandshake
+        if let e = check(tunnelErr) {
+            throw LinkError(step: "用電腦配對檔連不上（手機有解鎖嗎？手機重設或更新後要重新產生配對檔）", detail: e)
+        }
+    }
+
+    /// 手機上配對的 RPPairing 配對檔：「遠端配對」服務 → 通道。要有 Wi-Fi。
+    private func openViaRPPairing() throws {
         guard let data = PairingStore.load() else {
             throw LinkError(step: "還沒配對", detail: "到「設定」按「開始配對」")
         }
@@ -155,19 +223,11 @@ final class DeviceLink {
             drop()
             // 手機的開發者服務只開在 Wi-Fi 上：只有行動網路（4G/5G）時一定連不上
             if !DeviceLink.wifiUp() {
-                throw LinkError(step: "請先連上 Wi-Fi", detail: "改位置要用手機的開發者服務，它只在 Wi-Fi 上開著；只有 4G/5G 時連不上。連上任何 Wi-Fi 後再試一次（\(e)，埠 \(port)）")
+                throw LinkError(step: "請先連上 Wi-Fi（或匯入電腦配對檔）", detail: "手機上配對的連線方式只在 Wi-Fi 上能用；只有 4G/5G 時，要用 Mac 產生的電腦配對檔（設定 → 匯入配對檔）。（\(e)，埠 \(port)）")
             }
             throw LinkError(step: "連不上手機自己（手機有解鎖嗎？配對過期的話請重新配對）", detail: "\(e)，埠 \(port)")
         }
 
-        try ensureMounted()
-
-        if let e = check(remote_server_connect_rsd(adapter, handshake, &server)) {
-            drop(); throw LinkError(step: "開發者服務打不開（「開發者模式」有打開嗎？）", detail: e)
-        }
-        if let e = check(location_simulation_new(server, &sim)) {
-            drop(); throw LinkError(step: "改位置服務打不開", detail: e)
-        }
     }
 
     /// 開發者映像檔沒掛上就掛（手機重開機後會掉）
@@ -324,16 +384,17 @@ enum PairingStore {
 
     static func load() -> Data? {
         if let d = try? Data(contentsOf: url) {
-            if Keychain.read() == nil { Keychain.write(d) }   // 舊版存的，補一份到鑰匙圈
+            if Keychain.read(account) == nil { Keychain.write(d, account) }   // 舊版存的，補一份到鑰匙圈
             return d
         }
-        if let d = Keychain.read() {                           // 重裝後：從鑰匙圈拿回來
+        if let d = Keychain.read(account) {                               // 重裝後：從鑰匙圈拿回來
             try? d.write(to: url, options: .atomic)
             return d
         }
         return nil
     }
-    static var exists: Bool { FileManager.default.fileExists(atPath: url.path) || Keychain.read() != nil }
+    static var exists: Bool { FileManager.default.fileExists(atPath: url.path) || Keychain.read(account) != nil }
+    private static let account = "rppairing"
 
     /// 先用 idevice 讀一次，確定是 RPPairing 配對檔才存
     static func save(_ data: Data) throws {
@@ -348,41 +409,82 @@ enum PairingStore {
         }
         rp_pairing_file_free(handle)
         try data.write(to: url, options: .atomic)
-        Keychain.write(data)
+        Keychain.write(data, account)
     }
 
-    static func save(from source: URL) throws {
+    /// 匯入：手機配對的 RPPairing 檔，或 Mac 產生的電腦配對檔（lockdown），自動判斷
+    @discardableResult
+    static func save(from source: URL) throws -> String {
         let ok = source.startAccessingSecurityScopedResource()
         defer { if ok { source.stopAccessingSecurityScopedResource() } }
-        try save(try Data(contentsOf: source))
+        let data = try Data(contentsOf: source)
+        if (try? save(data)) != nil { return "已匯入手機配對檔" }
+        try LockdownStore.save(data)
+        return "已匯入電腦配對檔：之後 4G 也能改位置"
     }
 
     static func remove() {
         try? FileManager.default.removeItem(at: url)
-        Keychain.delete()
+        Keychain.delete(account)
     }
 
-    /// 只存在這支手機（不跟 iCloud 同步），開機解鎖一次後背景也讀得到
-    private enum Keychain {
-        static let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "wang.chunchieh.wanderline.rppairing",
-            kSecAttrAccount as String: "rppairing",
-        ]
-        static func read() -> Data? {
-            var q = query
-            q[kSecReturnData as String] = true
-            q[kSecMatchLimit as String] = kSecMatchLimitOne
-            var out: CFTypeRef?
-            return SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess ? out as? Data : nil
-        }
-        static func write(_ data: Data) {
-            SecItemDelete(query as CFDictionary)
-            var q = query
-            q[kSecValueData as String] = data
-            q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            SecItemAdd(q as CFDictionary, nil)
-        }
-        static func delete() { SecItemDelete(query as CFDictionary) }
+}
+
+/// Mac 產生的電腦配對檔（lockdown 的 pair record，像 LL Pair 做的那種）。走這個 4G 也能用。
+enum LockdownStore {
+    static var url: URL { PairingStore.docs.appendingPathComponent("lockdown.plist") }
+    private static let account = "lockdown"
+
+    static var exists: Bool { FileManager.default.fileExists(atPath: url.path) || Keychain.read(account) != nil }
+
+    static func load() -> Data? {
+        if let d = try? Data(contentsOf: url) { return d }
+        if let d = Keychain.read(account) { try? d.write(to: url, options: .atomic); return d }
+        return nil
     }
+
+    /// 先用 idevice 讀一次，確定是電腦配對檔才存
+    static func save(_ data: Data) throws {
+        var handle: OpaquePointer?
+        let err = data.withUnsafeBytes { raw in
+            idevice_pairing_file_from_bytes(raw.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &handle)
+        }
+        if let err {
+            let msg = err.pointee.message.map { String(cString: $0) } ?? ""
+            idevice_error_free(err)
+            throw LinkError(step: "看不懂這個檔案（不是配對檔）", detail: msg)
+        }
+        idevice_pairing_file_free(handle)
+        try data.write(to: url, options: .atomic)
+        Keychain.write(data, account)
+    }
+
+    static func remove() {
+        try? FileManager.default.removeItem(at: url)
+        Keychain.delete(account)
+    }
+}
+
+/// 鑰匙圈：只存在這支手機（不跟 iCloud 同步），App 刪掉重裝後還在；開機解鎖一次後背景也讀得到
+enum Keychain {
+    private static func query(_ account: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "wang.chunchieh.wanderline.pairing",
+         kSecAttrAccount as String: account]
+    }
+    static func read(_ account: String) -> Data? {
+        var q = query(account)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        return SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess ? out as? Data : nil
+    }
+    static func write(_ data: Data, _ account: String) {
+        SecItemDelete(query(account) as CFDictionary)
+        var q = query(account)
+        q[kSecValueData as String] = data
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        SecItemAdd(q as CFDictionary, nil)
+    }
+    static func delete(_ account: String) { SecItemDelete(query(account) as CFDictionary) }
 }
