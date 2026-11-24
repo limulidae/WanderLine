@@ -40,6 +40,10 @@ struct MapScreen: View {
     @State private var results: [MKMapItem] = []
     @State private var showSetup = false
     @State private var showGPX = false
+    @State private var showFavImport = false        // 收藏清單裡的「匯入 GPX」
+    @State private var routeName: String?           // 打開的路線叫什麼（存過的、匯入的），分享和存檔時用
+    @State private var shareFile: ShareFile?        // 分享路線的 GPX
+    @State private var favShareFile: ShareFile?     // 分享收藏的 GPX（掛在收藏清單上）
     @State private var showSave = false
     @State private var saveName = ""
     // 讓地點出現在「看得到的地圖」正中央（扣掉上面搜尋列、下面面板）
@@ -86,6 +90,7 @@ struct MapScreen: View {
         .onChange(of: engine.position?.latitude) { _, _ in followIfNeeded() }
         .onChange(of: engine.position?.longitude) { _, _ in followIfNeeded() }
         .sheet(isPresented: $showFavorites) { favoritesSheet }
+        .sheet(item: $shareFile) { ShareSheet(url: $0.url).presentationDetents([.medium, .large]) }
         .fileImporter(isPresented: $showGPX, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
             if case .success(let url) = r { importGPX(url) }
         }
@@ -101,7 +106,12 @@ struct MapScreen: View {
         }
         .alert("幫這條路線取個名字", isPresented: $showSave) {
             TextField("名字", text: $saveName)
-            Button("存") { if !saveName.isEmpty { routes.save(name: saveName, path: path) } }
+            Button("存") {
+                if !saveName.isEmpty {
+                    routes.save(name: saveName, path: path, stops: fixedName == nil ? waypoints : nil)
+                    routeName = saveName
+                }
+            }
             Button("取消", role: .cancel) {}
         }
         .onAppear {
@@ -162,7 +172,7 @@ struct MapScreen: View {
                 if tab == .point {
                     picked = c
                 } else {
-                    if fixedName != nil { fixedName = nil; snapped = nil }
+                    if fixedName != nil { fixedName = nil; snapped = nil; routeName = nil }
                     waypoints.append(c)
                     resnap()
                 }
@@ -296,7 +306,7 @@ struct MapScreen: View {
             Group {
                 if favorites.items.isEmpty {
                     ContentUnavailableView("還沒有收藏", systemImage: "star",
-                                           description: Text("在「定點」選好一個地方，按座標旁邊的 ☆ 就會收藏到這裡。"))
+                                           description: Text("在「定點」選好一個地方，按座標旁邊的 ☆ 就會收藏到這裡。也可以按左上角的 ⋯ 匯入 GPX。"))
                 } else {
                     List {
                         ForEach(favorites.items) { f in
@@ -325,7 +335,23 @@ struct MapScreen: View {
             }
             .navigationTitle("收藏的地點")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showFavorites = false } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu {
+                        Button("分享成 GPX", systemImage: "square.and.arrow.up") {
+                            if let u = GPX.file(GPX.favorites(favorites.items), name: "WanderLine 收藏的地點") { favShareFile = ShareFile(url: u) }
+                        }
+                        .disabled(favorites.items.isEmpty)
+                        Button("匯入 GPX", systemImage: "square.and.arrow.down") { showFavImport = true }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("分享或匯入")
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("完成") { showFavorites = false } }
+            }
+            .fileImporter(isPresented: $showFavImport, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
+                if case .success(let url) = r { importGPX(url) }
+            }
+            .sheet(item: $favShareFile) { ShareSheet(url: $0.url).presentationDetents([.medium, .large]) }
             // 在清單裡改名：改名視窗要掛在這張卡片上才會出現
             .alert("幫收藏改名", isPresented: Binding(get: { renaming != nil && showFavorites }, set: { if !$0 { renaming = nil } })) {
                 TextField("名字", text: $renameText)
@@ -625,11 +651,12 @@ struct MapScreen: View {
                 Spacer()
                 Menu {
                     Button("匯入 GPX", systemImage: "square.and.arrow.down") { showGPX = true }
-                    Button("存這條路線", systemImage: "bookmark") { saveName = ""; showSave = true }.disabled(path.count < 2)
+                    Button("存這條路線", systemImage: "bookmark") { saveName = routeName ?? ""; showSave = true }.disabled(path.count < 2)
+                    Button("分享成 GPX", systemImage: "square.and.arrow.up") { shareRoute() }.disabled(exportStops.count < 2)
                     if !routes.items.isEmpty {
                         Section("存過的路線") {
                             ForEach(routes.items) { r in
-                                Button(r.name) { loadFixed(r.coordinates, name: r.name) }
+                                Button(r.name) { loadSaved(r) }
                             }
                         }
                         Menu("刪除存過的路線") {
@@ -648,7 +675,7 @@ struct MapScreen: View {
                     Label("上一步", systemImage: "arrow.uturn.backward")
                 }
                 .disabled(waypoints.isEmpty)
-                Button { waypoints = []; snapped = nil; fixedName = nil; snapNote = nil } label: {
+                Button { waypoints = []; snapped = nil; fixedName = nil; snapNote = nil; routeName = nil } label: {
                     Label("清空", systemImage: "trash")
                 }
                 .disabled(path.isEmpty && waypoints.isEmpty)
@@ -787,13 +814,49 @@ struct MapScreen: View {
         }
     }
 
+    /// 分享路線時存哪些點：自己點的那幾個；整條照走的軌跡就只留轉彎的地方
+    private var exportStops: [CLLocationCoordinate2D] {
+        fixedName == nil ? waypoints : GPX.simplify(path)
+    }
+
+    private func shareRoute() {
+        let name = routeName ?? fixedName ?? "WanderLine 路線"
+        if let u = GPX.file(GPX.route(name: name, points: exportStops), name: name) { shareFile = ShareFile(url: u) }
+    }
+
+    private func loadSaved(_ r: SavedRoute) {
+        if let stops = r.stopCoordinates, stops.count >= 2 {
+            loadStops(stops, name: r.name)
+        } else {
+            loadFixed(r.coordinates, name: r.name)   // 舊版存的路線只有整條線
+        }
+    }
+
+    /// 載入幾個依序經過的點（存過的路線、GPX 的 rtept）：跟自己點的一樣，可以改、會沿街道接起來
+    private func loadStops(_ pts: [CLLocationCoordinate2D], name: String) {
+        guard pts.count >= 2 else { return }
+        tab = .route
+        fixedName = nil
+        snapped = nil
+        snapNote = nil
+        waypoints = pts
+        routeName = name
+        resnap()
+        fit(pts)
+    }
+
     private func loadFixed(_ coords: [CLLocationCoordinate2D], name: String) {
         guard coords.count >= 2 else { return }
         tab = .route
         waypoints = []
         snapNote = nil
         fixedName = name
+        routeName = name
         snapped = coords
+        fit(coords)
+    }
+
+    private func fit(_ coords: [CLLocationCoordinate2D]) {
         let lats = coords.map(\.latitude), lngs = coords.map(\.longitude)
         let center = CLLocationCoordinate2D(latitude: (lats.min()! + lats.max()!) / 2, longitude: (lngs.min()! + lngs.max()!) / 2)
         let span = MKCoordinateSpan(latitudeDelta: (lats.max()! - lats.min()!) * 1.4 + 0.002, longitudeDelta: (lngs.max()! - lngs.min()!) * 1.4 + 0.002)
@@ -804,9 +867,24 @@ struct MapScreen: View {
         let ok = url.startAccessingSecurityScopedResource()
         defer { if ok { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else { engine.lastError = "讀不到這個檔案"; return }
-        let pts = GPX.parse(data)
-        if pts.count < 2 { engine.lastError = "GPX 裡找不到路線點"; return }
-        loadFixed(pts, name: url.deletingPathExtension().lastPathComponent)
+        let g = GPX.parse(data)
+        let fileName = url.deletingPathExtension().lastPathComponent
+        // <wpt> 加進收藏（15 公尺內已經收藏過的不重複加），照檔案裡的順序排在最上面
+        for w in g.waypoints.reversed() where favorites.find(w.coordinate) == nil {
+            favorites.add(name: w.name ?? "", at: w.coordinate)
+        }
+        if g.route.count >= 2 {
+            showFavorites = false
+            loadStops(g.route, name: g.routeName ?? fileName)
+        } else if g.track.count >= 2 {
+            showFavorites = false
+            loadFixed(g.track, name: g.trackName ?? fileName)
+        } else if g.waypoints.isEmpty {
+            engine.lastError = "這個 GPX 裡沒有地點也沒有路線"
+        } else if !showFavorites {
+            // 只有地點：打開收藏清單讓人看到加進去了（等選檔案的畫面收起來）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { showFavorites = true }
+        }
     }
 }
 
@@ -838,39 +916,13 @@ enum StreetRouter {
     }
 }
 
-enum GPX {
-    static func parse(_ data: Data) -> [CLLocationCoordinate2D] {
-        let d = Delegate()
-        let p = XMLParser(data: data)
-        p.delegate = d
-        p.parse()
-        return d.track.isEmpty ? (d.route.isEmpty ? d.waypoints : d.route) : d.track
-    }
-
-    private final class Delegate: NSObject, XMLParserDelegate {
-        var track: [CLLocationCoordinate2D] = []
-        var route: [CLLocationCoordinate2D] = []
-        var waypoints: [CLLocationCoordinate2D] = []
-
-        func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String] = [:]) {
-            let local = name.split(separator: ":").last.map(String.init) ?? name
-            guard let la = attributes["lat"].flatMap(Double.init), let lo = attributes["lon"].flatMap(Double.init) else { return }
-            let c = CLLocationCoordinate2D(latitude: la, longitude: lo)
-            switch local {
-            case "trkpt": track.append(c)
-            case "rtept": route.append(c)
-            case "wpt": waypoints.append(c)
-            default: break
-            }
-        }
-    }
-}
-
 struct SavedRoute: Codable, Identifiable {
     var id = UUID()
     var name: String
     var points: [[Double]]
+    var stops: [[Double]]? = nil        // 自己點的那幾個點（舊版存的沒有）
     var coordinates: [CLLocationCoordinate2D] { points.map { CLLocationCoordinate2D(latitude: $0[0], longitude: $0[1]) } }
+    var stopCoordinates: [CLLocationCoordinate2D]? { stops?.map { CLLocationCoordinate2D(latitude: $0[0], longitude: $0[1]) } }
 }
 
 @MainActor
@@ -885,9 +937,10 @@ final class RouteStore: ObservableObject {
         if let d, let v = try? JSONDecoder().decode([SavedRoute].self, from: d) { items = v }
     }
 
-    func save(name: String, path: [CLLocationCoordinate2D]) {
+    func save(name: String, path: [CLLocationCoordinate2D], stops: [CLLocationCoordinate2D]?) {
         items.removeAll { $0.name == name }
-        items.insert(SavedRoute(name: name, points: path.map { [$0.latitude, $0.longitude] }), at: 0)
+        let st = (stops?.count ?? 0) >= 2 ? stops?.map { [$0.latitude, $0.longitude] } : nil
+        items.insert(SavedRoute(name: name, points: path.map { [$0.latitude, $0.longitude] }, stops: st), at: 0)
         persist()
     }
 
