@@ -36,16 +36,26 @@ d = pathlib.Path(tempfile.mkdtemp())
 (d / "manifest.plist").write_bytes(plistlib.dumps({"items": [{
     "assets": [{"kind": "software-package", "url": f"{PAGES}/WanderLine.ipa?v={build}"}],
     "metadata": {"bundle-identifier": "wang.chunchieh.wanderline", "bundle-version": build, "kind": "software", "title": "WanderLine"}}]}))
-(d / "index.html").write_text(f"""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
+(d / "latest.json").write_text(json.dumps({"version": ver, "build": build}), encoding="utf-8")
+# 網頁每次都去抓 latest.json（不用快取），避免 Safari 顯示舊的頁面、按了裝到舊版
+(d / "index.html").write_text("""<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>安裝 WanderLine</title>
-<style>body{{font:17px -apple-system,sans-serif;margin:0;padding:40px 20px;text-align:center;background:#f2f2f7;color:#111}}
-@media (prefers-color-scheme:dark){{body{{background:#000;color:#eee}}}}
-a.btn{{display:inline-block;margin:24px 0;padding:14px 40px;border-radius:14px;background:#0a84ff;color:#fff;text-decoration:none;font-weight:600}}
-p{{color:#888;font-size:14px;max-width:420px;margin:8px auto}}</style></head><body>
-<h1>WanderLine</h1><p>版本 {ver} ({build})</p>
-<a class="btn" href="itms-services://?action=download-manifest&amp;url={urllib.parse.quote(f'{PAGES}/manifest.plist?v={build}', safe='')}">安裝</a>
-<p>用 Safari 打開這頁再按「安裝」。只有登記過的 iPhone 能裝，而且要先打開「設定 → 隱私權與安全性 → 開發者模式」。</p>
-</body></html>""", encoding="utf-8")
+<style>body{font:17px -apple-system,sans-serif;margin:0;padding:40px 20px;text-align:center;background:#f2f2f7;color:#111}
+@media (prefers-color-scheme:dark){body{background:#000;color:#eee}}
+a.btn{display:inline-block;margin:24px 0;padding:14px 40px;border-radius:14px;background:#0a84ff;color:#fff;text-decoration:none;font-weight:600}
+p{color:#888;font-size:14px;max-width:420px;margin:8px auto}</style></head><body>
+<h1>WanderLine</h1><p id="v">版本 __VER__ (__BUILD__)</p>
+<a class="btn" id="go" href="itms-services://?action=download-manifest&amp;url=__MANIFEST__">安裝</a>
+<p>用 Safari 打開這頁再按「安裝」，再按一次確認，然後回主畫面看圖示的下載圈圈。只有登記過的 iPhone 能裝，而且要先打開「設定 → 隱私權與安全性 → 開發者模式」。</p>
+<script>
+fetch("latest.json?t=" + Date.now(), {cache: "no-store"}).then(r => r.json()).then(j => {
+  document.getElementById("v").textContent = "版本 " + j.version + " (" + j.build + ")";
+  const m = location.origin + location.pathname.replace(/[^/]*$/, "") + "manifest.plist?v=" + j.build;
+  document.getElementById("go").href = "itms-services://?action=download-manifest&url=" + encodeURIComponent(m);
+}).catch(() => {});
+</script>
+</body></html>""".replace("__VER__", ver).replace("__BUILD__", build)
+   .replace("__MANIFEST__", urllib.parse.quote(f"{PAGES}/manifest.plist?v={build}", safe="")), encoding="utf-8")
 (d / ".nojekyll").write_text("")
 run_git = lambda *a: subprocess.run(["git", *a], cwd=d, check=True, capture_output=True)
 run_git("init", "-q", "-b", "gh-pages")
