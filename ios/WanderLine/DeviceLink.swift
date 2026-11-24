@@ -108,6 +108,22 @@ final class DeviceLink {
         sim = nil; server = nil; handshake = nil; adapter = nil
     }
 
+    /// Wi-Fi（en0）有沒有 IPv4 位址
+    static func wifiUp() -> Bool {
+        var list: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&list) == 0, let first = list else { return false }
+        defer { freeifaddrs(list) }
+        var p: UnsafeMutablePointer<ifaddrs>? = first
+        while let i = p {
+            if String(cString: i.pointee.ifa_name) == "en0", let a = i.pointee.ifa_addr,
+               a.pointee.sa_family == sa_family_t(AF_INET), (i.pointee.ifa_flags & UInt32(IFF_UP)) != 0 {
+                return true
+            }
+            p = i.pointee.ifa_next
+        }
+        return false
+    }
+
     private func connect() throws {
         guard let data = PairingStore.load() else {
             throw LinkError(step: "還沒配對", detail: "到「設定」按「開始配對」")
@@ -122,7 +138,8 @@ final class DeviceLink {
         var addr = sockaddr_in()
         addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = in_port_t(PairingPort.resolve()).bigEndian
+        let port = PairingPort.resolve()
+        addr.sin_port = in_port_t(port).bigEndian
         _ = DeviceLink.targetIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
 
         var newAdapter: OpaquePointer?
@@ -136,7 +153,11 @@ final class DeviceLink {
         handshake = newHandshake
         if let e = check(tunnelErr) {
             drop()
-            throw LinkError(step: "連不上手機自己（手機有解鎖嗎？配對過期的話請重新配對）", detail: e)
+            // 手機的開發者服務只開在 Wi-Fi 上：只有行動網路（4G/5G）時一定連不上
+            if !DeviceLink.wifiUp() {
+                throw LinkError(step: "請先連上 Wi-Fi", detail: "改位置要用手機的開發者服務，它只在 Wi-Fi 上開著；只有 4G/5G 時連不上。連上任何 Wi-Fi 後再試一次（\(e)，埠 \(port)）")
+            }
+            throw LinkError(step: "連不上手機自己（手機有解鎖嗎？配對過期的話請重新配對）", detail: "\(e)，埠 \(port)")
         }
 
         try ensureMounted()
