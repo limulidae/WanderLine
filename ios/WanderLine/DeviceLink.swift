@@ -30,9 +30,17 @@ final class DeviceLink {
     func set(_ lat: Double, _ lng: Double) async throws {
         // 已經連著就直接送
         // 原本的連線送不出去時，記下原因（切網路後斷線時方便查）
+        // 剛切網路（關飛航模式）時可能卡一下：先在原本的連線上多試兩次，不要馬上丟掉——
+        // 在 4G 下丟掉就連不回來了（要再開飛航模式）
         let fastError = try await run { () -> String? in
             guard let sim = self.sim else { return "還沒連線" }
-            return self.check(location_simulation_set(sim, lat, lng))
+            var last: String?
+            for attempt in 0..<3 {
+                if attempt > 0 { Thread.sleep(forTimeInterval: 0.7) }
+                last = self.check(location_simulation_set(sim, lat, lng))
+                if last == nil { return nil }
+            }
+            return last
         }
         if fastError == nil { return }
 
