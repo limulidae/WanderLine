@@ -52,9 +52,11 @@ final class DeviceLink {
     func clear() async throws {
         try await run {
             guard let sim = self.sim else { return }
-            let e = self.check(location_simulation_clear(sim))
-            self.drop()
-            if let e { throw LinkError(step: "還原失敗", detail: e) }
+            // 還原後連線留著：用 4G 時重新連線要先開飛航模式，留著下次改位置就不用再弄一次
+            if let e = self.check(location_simulation_clear(sim)) {
+                self.drop()
+                throw LinkError(step: "還原失敗", detail: e)
+            }
         }
     }
 
@@ -185,10 +187,14 @@ final class DeviceLink {
             drop()
             errors.append("埠 \(port)\(viaRSD ? "（RSD）" : "")：\(e)")
         }
-        let wifi = DeviceLink.wifiUp() ? "有 Wi-Fi" : "沒有 Wi-Fi"
         let bonjour = found == nil ? "找不到配對服務的埠" : "配對服務在埠 \(found!)"
+        // 正在用 4G/5G 時，iPhone 會擋住新的開發者連線；先在飛航模式（或 Wi-Fi）連上，之後切回 4G 連線會留著
+        if !DeviceLink.wifiUp() {
+            throw LinkError(step: "用 4G/5G 時要先開一下飛航模式",
+                            detail: "iPhone 在用行動網路時不讓 WanderLine 連線。請：① 打開飛航模式 ② 再按一次「移到這裡」 ③ 改好後關掉飛航模式，之後就能一直用。（\(bonjour)。" + errors.joined(separator: "；") + "）")
+        }
         throw LinkError(step: "連不上手機自己（手機有解鎖嗎？配對過期的話請重新配對）",
-                        detail: "\(wifi)、\(bonjour)。" + errors.joined(separator: "；"))
+                        detail: "有 Wi-Fi、\(bonjour)。" + errors.joined(separator: "；"))
     }
 
     /// 開發者映像檔沒掛上就掛（手機重開機後會掉）
