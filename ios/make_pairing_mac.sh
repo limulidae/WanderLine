@@ -25,7 +25,7 @@ pymobiledevice3 lockdown wifi-connections on
 
 echo "== 存配對檔"
 pymobiledevice3 lockdown save-pair-record "$OUT"
-UDID=$(pymobiledevice3 lockdown get --key UniqueDeviceID 2>/dev/null | tr -d '"[:space:]')
+UDID=$(pymobiledevice3 lockdown info 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("UniqueDeviceID",""))' 2>/dev/null || true)
 if [ -n "$UDID" ] && ! /usr/libexec/PlistBuddy -c "Print :UDID" "$OUT" >/dev/null 2>&1; then
   /usr/libexec/PlistBuddy -c "Add :UDID string $UDID" "$OUT"
 fi
