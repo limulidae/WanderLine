@@ -87,6 +87,11 @@ struct SetupScreen: View {
                 } header: { Text("其他") } footer: {
                     Text("iOS 26 以下不能在手機上配對：用電腦的 idevice_pair 產生 RPPairing 配對檔，再從這裡匯入。")
                 }
+
+                Section {} footer: {
+                    Text("WanderLine \(Self.appVersion)")
+                        .frame(maxWidth: .infinity)
+                }
             }
             .navigationTitle("設定")
             .navigationBarTitleDisplayMode(.inline)
@@ -107,6 +112,14 @@ struct SetupScreen: View {
                 if phase == .done { hasPairing = PairingStore.exists }
             }
         }
+    }
+
+    /// 例如「0.3 (5)」：版本號（打包編號）
+    static var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let v = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(v) (\(b))"
     }
 
     // MARK: - 配對
