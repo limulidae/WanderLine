@@ -47,6 +47,7 @@ p{color:#888;font-size:14px;max-width:420px;margin:8px auto}</style></head><body
 <h1>WanderLine</h1><p id="v">版本 __VER__ (__BUILD__)</p>
 <a class="btn" id="go" href="itms-services://?action=download-manifest&amp;url=__MANIFEST__">安裝</a>
 <p>用 Safari 打開這頁再按「安裝」，再按一次確認，然後回主畫面看圖示的下載圈圈。只有登記過的 iPhone 能裝，而且要先打開「設定 → 隱私權與安全性 → 開發者模式」。</p>
+<p><b>已經裝過舊版、按了沒反應？</b>要先關掉 WanderLine 的 VPN：在 WanderLine 的「設定」最下面按「更新 WanderLine」會自動關好再帶你回來這頁；或到「設定 → VPN → WanderLine ⓘ」關掉「需要時連線」，再把 VPN 關掉。</p>
 <script>
 fetch("latest.json?t=" + Date.now(), {cache: "no-store"}).then(r => r.json()).then(j => {
   document.getElementById("v").textContent = "版本 " + j.version + " (" + j.build + ")";

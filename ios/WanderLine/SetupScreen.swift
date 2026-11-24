@@ -104,9 +104,21 @@ struct SetupScreen: View {
                     Text("一般不需要：上面的「配對這支 iPhone」在手機上就能完成。這裡是給已經有配對檔的人用的。")
                 }
 
-                Section {} footer: {
-                    Text("WanderLine \(Self.appVersion)")
-                        .frame(maxWidth: .infinity)
+                Section {
+                    Button {
+                        Task {
+                            await vpn.pauseForUpdate()
+                            if let u = URL(string: "https://limulidae.github.io/WanderLine/") { await UIApplication.shared.open(u) }
+                        }
+                    } label: { Label("更新 WanderLine", systemImage: "arrow.down.circle") }
+                } footer: {
+                    VStack(spacing: 8) {
+                        Text("會打開安裝頁。更新時要先關掉 VPN（按這裡會自動關），裝好後打開 WanderLine 改位置就會自動開回來。")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("WanderLine \(Self.appVersion)")
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 6)
+                    }
                 }
             }
             .navigationTitle("設定")

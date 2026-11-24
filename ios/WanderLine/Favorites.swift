@@ -17,7 +17,9 @@ final class FavoriteStore: ObservableObject {
     private let key = "favorites"
 
     init() {
-        if let d = UserDefaults.standard.data(forKey: key), let v = try? JSONDecoder().decode([Favorite].self, from: d) { items = v }
+        // App 刪掉重裝後 UserDefaults 會清空，從鑰匙圈的備份拿回來
+        let d = UserDefaults.standard.data(forKey: key) ?? Keychain.read(key)
+        if let d, let v = try? JSONDecoder().decode([Favorite].self, from: d) { items = v }
     }
 
     /// 這個點附近 15 公尺內已經收藏過的
@@ -54,6 +56,6 @@ final class FavoriteStore: ObservableObject {
     }
 
     private func persist() {
-        if let d = try? JSONEncoder().encode(items) { UserDefaults.standard.set(d, forKey: key) }
+        if let d = try? JSONEncoder().encode(items) { UserDefaults.standard.set(d, forKey: key); Keychain.write(d, key) }
     }
 }

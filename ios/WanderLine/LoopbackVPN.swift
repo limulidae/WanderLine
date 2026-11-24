@@ -14,6 +14,16 @@ final class LoopbackVPN: ObservableObject {
 
     private var observer: NSObjectProtocol?
 
+    /// 更新 App 前先把 VPN 關掉：VPN 開著時 iPhone 不肯用網址安裝蓋過去。
+    /// 「需要時連線」也要關，不然一關掉又自己連上；下次連線時 ensureOn() 會再打開。
+    func pauseForUpdate() async {
+        guard let m = try? await find() else { return }
+        m.isOnDemandEnabled = false
+        try? await m.saveToPreferences()
+        m.connection.stopVPNTunnel()
+        connected = false
+    }
+
     func refresh() async {
         let m = try? await find()
         installed = m != nil
