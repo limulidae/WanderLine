@@ -29,16 +29,19 @@ final class DeviceLink {
 
     func set(_ lat: Double, _ lng: Double) async throws {
         // 已經連著就直接送
-        let sent = try await run { () -> Bool in
-            guard let sim = self.sim else { return false }
-            return self.check(location_simulation_set(sim, lat, lng)) == nil
+        // 原本的連線送不出去時，記下原因（切網路後斷線時方便查）
+        let fastError = try await run { () -> String? in
+            guard let sim = self.sim else { return "還沒連線" }
+            return self.check(location_simulation_set(sim, lat, lng))
         }
-        if sent { return }
+        if fastError == nil { return }
 
         try await prepare()
         try await run {
             self.drop()
-            try self.connect()
+            do { try self.connect() } catch let e as LinkError {
+                throw LinkError(step: e.step, detail: e.detail + "（重新連線前，原本的連線：\(fastError ?? "")）")
+            }
             if let e = self.check(location_simulation_set(self.sim, lat, lng)) {
                 self.drop()
                 throw LinkError(step: "改位置失敗", detail: e)
