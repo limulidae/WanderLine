@@ -17,6 +17,7 @@ struct MapScreen: View {
     @State private var favName = ""
     @State private var renaming: Favorite?          // 正在改名的收藏
     @State private var showFavorites = false        // ☰ →「收藏的地點」
+    @State private var loopBack: [CLLocationCoordinate2D]?   // 「繞圈」時從終點沿街道走回起點的那段
     @State private var renameText = ""
     @AppStorage("speedKmh") private var speed = 4.5
     @AppStorage("snapToStreets") private var snapToStreets = true
@@ -79,6 +80,7 @@ struct MapScreen: View {
             panel.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { panelFrame = $0 }
         }
         .sheet(isPresented: $showSetup) { SetupScreen() }
+        .onChange(of: loopKey) { _, _ in updateLoopBack() }
         .sheet(isPresented: $showFavorites) { favoritesSheet }
         .fileImporter(isPresented: $showGPX, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
             if case .success(let url) = r { importGPX(url) }
@@ -130,6 +132,10 @@ struct MapScreen: View {
                         MapPolyline(coordinates: waypoints).stroke(.blue.opacity(0.35), style: StrokeStyle(lineWidth: 2, dash: [4, 6]))
                     }
                     if path.count >= 2 { MapPolyline(coordinates: path).stroke(.blue, lineWidth: 5) }
+                    // 繞圈：走回起點的那段用虛線畫出來，看得到整圈
+                    if mode == .loop, let back = loopBack, back.count >= 2 {
+                        MapPolyline(coordinates: back).stroke(.blue.opacity(0.7), style: StrokeStyle(lineWidth: 4, lineCap: .round, dash: [2, 7]))
+                    }
                     ForEach(Array(waypoints.enumerated()), id: \.offset) { i, c in
                         Annotation("", coordinate: c) { waypointDot(i) }
                     }
@@ -623,6 +629,11 @@ struct MapScreen: View {
         let m = Geo.length(path)
         let min = max(1, Int((m / (speed / 3.6) / 60).rounded()))
         let what = fixedName.map { "「\($0)」" } ?? (snapToStreets && snapped != nil ? "沿街道" : "直線")
+        if mode == .loop, let back = loopBack {
+            let lap = m + Geo.length(back)
+            let lapMin = max(1, Int((lap / (speed / 3.6) / 60).rounded()))
+            return "\(what)・繞一圈 \(Geo.text(lap))・約 \(lapMin) 分鐘（虛線是走回起點）"
+        }
         return "\(what) \(Geo.text(m))・約 \(min) 分鐘"
     }
 
@@ -635,22 +646,28 @@ struct MapScreen: View {
 
     // MARK: - 路線
 
-    /// 「繞圈」：終點沒回到起點的話，先找一條從終點沿街道走回起點的路接上，
-    /// 不要從終點直線穿過房子回起點（找不到路才用直線）
+    /// 路線或走法改了就重算「走回起點」那段
+    private var loopKey: String {
+        guard mode == .loop, let f = path.first, let l = path.last else { return "" }
+        return "\(path.count)|\(f.latitude),\(f.longitude)|\(l.latitude),\(l.longitude)"
+    }
+
+    /// 「繞圈」：終點沒回到起點的話，找一條從終點沿街道走回起點的路（找不到就用直線），
+    /// 地圖上用虛線畫出來，開始走時接在路線後面——不會從終點直線穿過房子回起點
+    private func updateLoopBack() {
+        loopBack = nil
+        guard mode == .loop, path.count >= 2, let first = path.first, let last = path.last, Geo.distance(first, last) > 20 else { return }
+        let key = loopKey
+        Task {
+            let back = (try? await StreetRouter.walk(through: [last, first])) ?? [last, first]
+            if key == loopKey { loopBack = back }
+        }
+    }
+
     private func startWalk() {
         var p = path
-        guard mode == .loop, p.count >= 2, let first = p.first, let last = p.last, Geo.distance(first, last) > 20 else {
-            engine.startWalk(path: p, kmh: speed, mode: mode, wobble: wobble)
-            return
-        }
-        snapping = true
-        Task {
-            if let back = try? await StreetRouter.walk(through: [last, first]), back.count >= 2 {
-                p += back.dropFirst()
-            }
-            snapping = false
-            engine.startWalk(path: p, kmh: speed, mode: mode, wobble: wobble)
-        }
+        if mode == .loop, let back = loopBack, back.count >= 2 { p += back.dropFirst() }
+        engine.startWalk(path: p, kmh: speed, mode: mode, wobble: wobble)
     }
 
     private func resnap() {
