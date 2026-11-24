@@ -15,6 +15,8 @@ struct MapScreen: View {
     @FocusState private var searchFocused: Bool
     @State private var showFavName = false
     @State private var favName = ""
+    @State private var renaming: Favorite?          // 正在改名的收藏
+    @State private var renameText = ""
     @AppStorage("speedKmh") private var speed = 4.5
     @AppStorage("snapToStreets") private var snapToStreets = true
     @AppStorage("wobble") private var wobble = true
@@ -83,6 +85,11 @@ struct MapScreen: View {
         .fileImporter(isPresented: $showGPX, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
             if case .success(let url) = r { importGPX(url) }
         }
+        .alert("幫收藏改名", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("名字", text: $renameText)
+            Button("儲存") { if let f = renaming { favorites.rename(f, to: renameText) }; renaming = nil }
+            Button("取消", role: .cancel) { renaming = nil }
+        }
         .alert("收藏這個地點", isPresented: $showFavName) {
             TextField("名字", text: $favName)
             Button("收藏") { if let p = picked { favorites.add(name: favName, at: p) } }
@@ -114,6 +121,7 @@ struct MapScreen: View {
                             .overlay(Circle().stroke(.white, lineWidth: 2))
                             .shadow(radius: 1.5)
                             .onTapGesture { tab = .point; picked = f.coordinate }
+                            .contextMenu { favoriteMenu(f) }
                     }
                 }
                 if tab == .point, let p = picked {
@@ -283,9 +291,7 @@ struct MapScreen: View {
                             .padding(.vertical, 8).padding(.horizontal, 12)
                         }
                         .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("刪除收藏", systemImage: "trash", role: .destructive) { favorites.remove(f) }
-                        }
+                        .contextMenu { favoriteMenu(f) }
                         Divider()
                     }
                 }
@@ -352,6 +358,17 @@ struct MapScreen: View {
     private func goAfterKeyboard(_ c: CLLocationCoordinate2D) {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { go(to: c) }
+    }
+
+    /// 收藏的長按選單（清單、地圖上的星星都用這個）
+    @ViewBuilder private func favoriteMenu(_ f: Favorite) -> some View {
+        Button("改名", systemImage: "pencil") { startRename(f) }
+        Button("刪除收藏", systemImage: "trash", role: .destructive) { favorites.remove(f) }
+    }
+
+    private func startRename(_ f: Favorite) {
+        renameText = f.name
+        renaming = f
     }
 
     /// 先跳出取名字的視窗，同時去查附近的地名填進去（查到之前使用者已經開始打字就不蓋掉）
@@ -450,7 +467,15 @@ struct MapScreen: View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
                 if let p = picked, let f = favorites.find(p) {
-                    Text(f.name).font(.footnote.weight(.semibold)).lineLimit(1)
+                    // 點名字就能改名
+                    Button { startRename(f) } label: {
+                        HStack(spacing: 3) {
+                            Text(f.name).font(.footnote.weight(.semibold)).lineLimit(1)
+                            Image(systemName: "pencil").font(.caption2)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("幫「\(f.name)」改名")
                 }
                 Text(picked.map { String(format: "%.6f, %.6f", $0.latitude, $0.longitude) } ?? "點地圖選一個地方")
                     .font(.footnote).foregroundStyle(.secondary).lineLimit(1)

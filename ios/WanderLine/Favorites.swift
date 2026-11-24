@@ -33,6 +33,13 @@ final class FavoriteStore: ObservableObject {
         persist()
     }
 
+    func rename(_ f: Favorite, to name: String) {
+        let n = name.trimmingCharacters(in: .whitespaces)
+        guard !n.isEmpty, let i = items.firstIndex(where: { $0.id == f.id }) else { return }
+        items[i].name = n
+        persist()
+    }
+
     func remove(_ f: Favorite) {
         items.removeAll { $0.id == f.id }
         persist()
