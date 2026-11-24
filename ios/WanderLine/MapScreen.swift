@@ -116,7 +116,17 @@ struct MapScreen: View {
         }
         .onAppear {
             if locationManager.authorizationStatus == .notDetermined { locationManager.requestWhenInUseAuthorization() }
-            if !PairingStore.exists { showSetup = true }
+            if !PairingStore.exists {
+                showSetup = true
+            } else {
+                // 上次走到一半關掉（或更新）App：自動接著走，地圖上畫出那條路線
+                Task {
+                    await engine.resumeIfNeeded()
+                    if engine.walking, engine.route.count >= 2 {
+                        loadFixed(engine.route, name: engine.routeName ?? "上次的路線")
+                    }
+                }
+            }
         }
     }
 
@@ -794,7 +804,7 @@ struct MapScreen: View {
     private func startWalk() {
         var p = path
         if mode == .loop, let back = loopBack, back.count >= 2 { p += back.dropFirst() }
-        engine.startWalk(path: p, kmh: speed, mode: mode, wobble: wobble)
+        engine.startWalk(path: p, kmh: speed, mode: mode, wobble: wobble, name: routeName ?? fixedName)
     }
 
     private func resnap() {

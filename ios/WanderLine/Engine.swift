@@ -20,7 +20,11 @@ final class Engine: ObservableObject {
 
     @Published private(set) var position: CLLocationCoordinate2D?
     @Published private(set) var walking = false
-    @Published var paused = false
+    @Published var paused = false {
+        didSet { if walking { progress.paused = paused; saveProgress() } }
+    }
+    @Published private(set) var route: [CLLocationCoordinate2D] = []   // 正在走的整條路線
+    @Published private(set) var routeName: String?
     @Published private(set) var doneMeters: Double = 0
     @Published private(set) var totalMeters: Double = 0
     @Published private(set) var lap = 0
@@ -32,10 +36,56 @@ final class Engine: ObservableObject {
     private var resendTask: Task<Void, Never>?
     private var keepAlive: KeepAlive { KeepAlive.shared }
 
+    // MARK: 關掉 App 再打開要接著走：開始走時存路線，之後每秒存走到哪裡
+    private struct Progress: Codable {
+        var kmh: Double
+        var mode: String
+        var wobble: Bool
+        var name: String?
+        var lap = 0
+        var reversed = false      // 「來回」走到回程了
+        var done = 0.0            // 這一圈走了幾公尺
+        var paused = false
+    }
+    private enum Saved {
+        static let path = "walk.path"
+        static let progress = "walk.progress"
+        static let parked = "walk.parked"     // 沒在走、停在某個假位置
+    }
+    private var progress = Progress(kmh: 4.5, mode: WalkMode.once.rawValue, wobble: true)
+
+    private func saveProgress() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(progress), forKey: Saved.progress)
+    }
+
+    private func park(_ c: CLLocationCoordinate2D?) {
+        if let c { UserDefaults.standard.set([c.latitude, c.longitude], forKey: Saved.parked) }
+        else { UserDefaults.standard.removeObject(forKey: Saved.parked) }
+    }
+
+    /// App 打開時：上次走到一半就從那裡接著走；停在某個假位置就繼續停在那裡
+    func resumeIfNeeded() async {
+        guard !walking, position == nil else { return }
+        let d = UserDefaults.standard
+        if let pd = d.data(forKey: Saved.path), let pts = try? JSONDecoder().decode([[Double]].self, from: pd),
+           let gd = d.data(forKey: Saved.progress), let p = try? JSONDecoder().decode(Progress.self, from: gd) {
+            let path = pts.filter { $0.count == 2 }.map { CLLocationCoordinate2D(latitude: $0[0], longitude: $0[1]) }
+            if path.count >= 2 {
+                begin(path: path, from: p)
+                return
+            }
+        }
+        if let c = d.array(forKey: Saved.parked) as? [Double], c.count == 2 {
+            await send(CLLocationCoordinate2D(latitude: c[0], longitude: c[1]))
+            startResending()
+        }
+    }
+
     /// 瞬間移到某個點
     func teleport(to c: CLLocationCoordinate2D) async {
         stopWalk()
         await send(c)
+        if position != nil { park(position) }
         startResending()
     }
 
@@ -46,6 +96,7 @@ final class Engine: ObservableObject {
         let lat = p.latitude + northMeters / 111_320
         let lng = p.longitude + eastMeters / (111_320 * cos(p.latitude * .pi / 180))
         await send(CLLocationCoordinate2D(latitude: lat, longitude: lng))
+        park(position)
         startResending()
     }
 
@@ -59,29 +110,43 @@ final class Engine: ObservableObject {
             lastError = error.localizedDescription
         }
         position = nil
+        park(nil)
         finished = false
         keepAlive.stop(for: .walk)
     }
 
-    func startWalk(path: [CLLocationCoordinate2D], kmh: Double, mode: WalkMode, wobble: Bool) {
+    func startWalk(path: [CLLocationCoordinate2D], kmh: Double, mode: WalkMode, wobble: Bool, name: String? = nil) {
+        begin(path: path, from: Progress(kmh: kmh, mode: mode.rawValue, wobble: wobble, name: name))
+    }
+
+    private func begin(path: [CLLocationCoordinate2D], from p: Progress) {
         guard path.count >= 2 else { return }
         stopWalk()
         resendTask?.cancel(); resendTask = nil
         finished = false
+        route = path
+        routeName = p.name
+        progress = p
         walking = true
-        paused = false
+        paused = p.paused
+        park(nil)
+        UserDefaults.standard.set(try? JSONEncoder().encode(path.map { [$0.latitude, $0.longitude] }), forKey: Saved.path)
+        saveProgress()
         keepAlive.start(for: .walk)
-        let speed = max(0.5, kmh) / 3.6
         walkTask = Task { [weak self] in
-            await self?.runWalk(path: path, speed: speed, mode: mode, wobble: wobble)
+            await self?.runWalk(path: path, from: p)
         }
     }
 
+    /// 停止走路（停在現在的位置）；下次打開 App 不會再接著走
     func stopWalk() {
         walkTask?.cancel()
         walkTask = nil
         walking = false
         paused = false
+        UserDefaults.standard.removeObject(forKey: Saved.path)
+        UserDefaults.standard.removeObject(forKey: Saved.progress)
+        if position != nil { park(position) }
     }
 
     // MARK: - 內部
@@ -111,16 +176,23 @@ final class Engine: ObservableObject {
         }
     }
 
-    private func runWalk(path: [CLLocationCoordinate2D], speed: Double, mode: WalkMode, wobble: Bool) async {
+    private func runWalk(path: [CLLocationCoordinate2D], from start: Progress) async {
+        let mode = WalkMode(rawValue: start.mode) ?? .once
+        let speed = max(0.5, start.kmh) / 3.6
+        let wobble = start.wobble
         var seq = path
         if mode == .loop, Geo.distance(path.first!, path.last!) > 1 { seq.append(path.first!) }
-        lap = 0
+        var reversed = start.reversed
+        if reversed { seq.reverse() }
+        lap = start.lap
+        var resumeAt = start.done       // 接著上次走：第一圈從上次走到的地方開始
         while !Task.isCancelled {
             let legs = zip(seq, seq.dropFirst()).map { Geo.distance($0, $1) }
             totalMeters = legs.reduce(0, +)
-            doneMeters = 0
+            var into = min(resumeAt, totalMeters)
+            doneMeters = into
+            resumeAt = 0
             var i = 0
-            var into = 0.0
             while !Task.isCancelled {
                 while i < legs.count && into >= legs[i] { into -= legs[i]; i += 1 }
                 var pos = i >= legs.count ? seq.last! : Geo.lerp(seq[i], seq[i + 1], legs[i] > 0 ? into / legs[i] : 1)
@@ -140,15 +212,28 @@ final class Engine: ObservableObject {
                 let step = speed * Double.random(in: 0.9...1.1)
                 into += step
                 doneMeters = min(totalMeters, doneMeters + step)
+                progress.lap = lap
+                progress.reversed = reversed
+                progress.done = doneMeters
+                saveProgress()
             }
             if Task.isCancelled { return }
             lap += 1
             if mode == .once { break }
-            if mode == .back { seq.reverse() }
+            if mode == .back { seq.reverse(); reversed.toggle() }
+            progress.lap = lap
+            progress.reversed = reversed
+            progress.done = 0
+            saveProgress()
         }
+        if Task.isCancelled { return }
         walking = false
         finished = true
         doneMeters = totalMeters
+        // 走完了：下次打開停在終點，不會再走一次
+        UserDefaults.standard.removeObject(forKey: Saved.path)
+        UserDefaults.standard.removeObject(forKey: Saved.progress)
+        park(position)
         startResending()
     }
 }
