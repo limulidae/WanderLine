@@ -12,8 +12,7 @@ struct LinkError: LocalizedError {
     let title: String
     var todo: String? = nil
     var tech: String? = nil
-    var errorDescription: String? { todo.map { "\(title)
-\($0)" } ?? title }
+    var errorDescription: String? { todo.map { "\(title)\n\($0)" } ?? title }
 
     /// 最近一次錯誤的技術細節
     nonisolated(unsafe) static var lastTech = ""
@@ -212,9 +211,7 @@ final class DeviceLink {
         // 正在用 4G/5G 時，iPhone 會擋住新的開發者連線；先在飛航模式（或 Wi-Fi）連上，之後切回 4G 連線會留著
         if !DeviceLink.wifiUp() {
             throw LinkError(title: "用 4G 時連不上",
-                            todo: "① 打開飛航模式
-② 再按一次「移到這裡」
-③ 位置改好後關掉飛航模式",
+                            todo: "① 打開飛航模式\n② 再按一次「移到這裡」\n③ 位置改好後關掉飛航模式",
                             tech: bonjour + "。" + errors.joined(separator: "；"))
         }
         throw LinkError(title: "連不上",
