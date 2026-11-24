@@ -17,6 +17,7 @@ struct MapScreen: View {
     @State private var favName = ""
     @State private var renaming: Favorite?          // 正在改名的收藏
     @State private var showFavorites = false        // ☰ →「收藏的地點」
+    @State private var following = false            // 地圖跟著目前位置走（右下角定位按鈕切換）
     @State private var loopBack: [CLLocationCoordinate2D]?   // 「繞圈」時從終點沿街道走回起點的那段
     @State private var renameText = ""
     @AppStorage("speedKmh") private var speed = 4.5
@@ -82,6 +83,8 @@ struct MapScreen: View {
         }
         .sheet(isPresented: $showSetup) { SetupScreen() }
         .onChange(of: loopKey) { _, _ in updateLoopBack() }
+        .onChange(of: engine.position?.latitude) { _, _ in followIfNeeded() }
+        .onChange(of: engine.position?.longitude) { _, _ in followIfNeeded() }
         .sheet(isPresented: $showFavorites) { favoritesSheet }
         .fileImporter(isPresented: $showGPX, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
             if case .success(let url) = r { importGPX(url) }
@@ -190,13 +193,28 @@ struct MapScreen: View {
                         .offset(x: 1, y: -1)
                 }
             }
-            roundButton("location.fill", label: "回到目前位置") {
-                if let c = CLLocationManager().location?.coordinate {
+            // 定位按鈕：按一下回到目前位置並「跟隨」（藍底），走路時地圖會跟著走、還是可以縮放；
+            // 再按一次或把地圖拖走就取消跟隨
+            Button {
+                if following {
+                    following = false
+                } else if let c = currentSpot {
+                    following = true
                     center(on: c, meters: nil)
                 } else {
                     withAnimation { camera = .userLocation(fallback: camera) }
                 }
+            } label: {
+                Image(systemName: following ? "location.fill" : "location")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(following ? Color.white : Color.accentColor)
+                    .frame(width: 48, height: 48)
+                    .background {
+                        if following { Circle().fill(Color.accentColor) } else { Circle().fill(.regularMaterial) }
+                    }
+                    .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
             }
+            .accessibilityLabel(following ? "取消跟隨" : "回到目前位置並跟隨")
         }
         .padding(.trailing, 14)
         .padding(.bottom, 10)
@@ -421,6 +439,12 @@ struct MapScreen: View {
         // 第一次定位好之後就改成固定的範圍，要回到自己的位置按右下角的定位按鈕
         if camera.followsUserLocation {
             camera = .region(region)
+        }
+        // 跟隨中：使用者把地圖拖離目前位置就取消跟隨（只縮放、位置還在畫面中間附近就繼續跟）
+        if following, camera.positionedByUser, let c = currentSpot,
+           let proxy = mapProxy, let pt = proxy.convert(c, to: .local), mapFrame.height > 0 {
+            let v = visibleCenter
+            if abs(pt.x - v.x) > mapFrame.width * 0.3 || abs(pt.y - v.y) > visibleHeight * 0.3 { following = false }
         }
         guard let c = pendingCenter else { return }
         pendingCenter = nil
@@ -707,6 +731,37 @@ struct MapScreen: View {
             let back = (try? await StreetRouter.walk(through: [last, first])) ?? [last, first]
             if key == loopKey { loopBack = back }
         }
+    }
+
+    /// 現在的位置：正在改位置就是假位置，不然是手機回報的位置
+    private var currentSpot: CLLocationCoordinate2D? {
+        engine.position ?? CLLocationManager().location?.coordinate
+    }
+
+    /// 看得到的地圖（扣掉上面搜尋列、下面面板）的正中央，地圖座標
+    private var visibleCenter: CGPoint {
+        let top = max(mapFrame.minY, searchFrame.maxY) - mapFrame.minY
+        let bottom = (panelFrame.height > 0 ? min(mapFrame.maxY, panelFrame.minY) : mapFrame.maxY) - mapFrame.minY
+        return CGPoint(x: mapFrame.width / 2, y: (top + bottom) / 2)
+    }
+    private var visibleHeight: CGFloat {
+        let top = max(mapFrame.minY, searchFrame.maxY)
+        let bottom = panelFrame.height > 0 ? min(mapFrame.maxY, panelFrame.minY) : mapFrame.maxY
+        return max(1, bottom - top)
+    }
+
+    /// 跟隨：位置快跑出畫面中間那一塊時才把地圖平移過去（保持目前的縮放），不會每秒拉一次打斷手指縮放
+    private func followIfNeeded() {
+        guard following, let c = engine.position, let proxy = mapProxy, let r = lastRegion,
+              let pt = proxy.convert(c, to: .local), mapFrame.height > 0 else { return }
+        let v = visibleCenter
+        guard abs(pt.x - v.x) > mapFrame.width * 0.2 || abs(pt.y - v.y) > visibleHeight * 0.2 else { return }
+        let latPerPt = r.span.latitudeDelta / mapFrame.height
+        let lonPerPt = r.span.longitudeDelta / mapFrame.width
+        // 讓 c 落在看得到的地圖正中央：地圖中心 = c 往上（北）偏「看得到的中心比地圖中心低多少」
+        let center = CLLocationCoordinate2D(latitude: c.latitude + (v.y - mapFrame.height / 2) * latPerPt,
+                                            longitude: c.longitude - (v.x - mapFrame.width / 2) * lonPerPt)
+        withAnimation(.easeInOut(duration: 0.6)) { camera = .region(MKCoordinateRegion(center: center, span: r.span)) }
     }
 
     private func startWalk() {
