@@ -284,7 +284,7 @@ struct MapScreen: View {
         let upper = s.uppercased()
         // 只能有數字、正負號、小數點、逗號、空白和 N/S/E/W，其他字（地名）就交給地點搜尋
         guard upper.range(of: #"^[\d\s.,+\-NSEW]+$"#, options: .regularExpression) != nil else { return nil }
-        let nums = upper.matches(of: /-?\d+(?:\.\d+)?/).compactMap { Double($0.output) }
+        let nums = upper.matches(of: #/-?\d+(?:\.\d+)?/#).compactMap { Double($0.output) }
         guard nums.count == 2 else { return nil }
         var lat = nums[0], lon = nums[1]
         // 寫成「121.5 E 25.0 N」這種經度在前的
