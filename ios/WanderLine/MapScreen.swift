@@ -558,15 +558,28 @@ struct MapScreen: View {
                     .disabled(fixedName != nil)
             }
             .font(.subheadline)
-            HStack {
-                Button("復原一點") { if !waypoints.isEmpty { waypoints.removeLast(); resnap() } }.disabled(waypoints.isEmpty)
-                Button("清空") { waypoints = []; snapped = nil; fixedName = nil; snapNote = nil }.disabled(path.isEmpty && waypoints.isEmpty)
+            HStack(spacing: 18) {
+                Button { if !waypoints.isEmpty { waypoints.removeLast(); resnap() } } label: {
+                    Label("上一步", systemImage: "arrow.uturn.backward")
+                }
+                .disabled(waypoints.isEmpty)
+                Button { waypoints = []; snapped = nil; fixedName = nil; snapNote = nil } label: {
+                    Label("清空", systemImage: "trash")
+                }
+                .disabled(path.isEmpty && waypoints.isEmpty)
                 Spacer()
-                Picker("", selection: $modeRaw) { ForEach(WalkMode.allCases) { Text($0.label).tag($0.rawValue) } }
-                    .pickerStyle(.menu)
-                Toggle("晃", isOn: $wobble).toggleStyle(.button).font(.caption)
             }
             .font(.subheadline)
+            // 走到終點後怎麼辦：三種直接並排，不用點開選單
+            HStack(spacing: 10) {
+                Text("走到終點後").font(.subheadline).fixedSize()
+                Picker("走到終點後", selection: $modeRaw) {
+                    ForEach(WalkMode.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+            }
+            Toggle("走路微微晃動（比較像真人）", isOn: $wobble)
+                .font(.subheadline)
             HStack {
                 Text("速度").font(.subheadline)
                 Slider(value: $speed, in: 1...20, step: 0.5)
