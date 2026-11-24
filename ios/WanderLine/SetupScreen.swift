@@ -76,7 +76,7 @@ struct SetupScreen: View {
                 }
 
                 Section {
-                    Button("匯入電腦配對檔（出門沒 Wi-Fi 也能用）") { importing = true }
+                    Button("匯入配對檔") { importing = true }
                     if hasPairing {
                         Button("刪除配對檔", role: .destructive) {
                             PairingStore.remove()
@@ -86,7 +86,7 @@ struct SetupScreen: View {
                         }
                     }
                 } header: { Text("其他") } footer: {
-                    Text("手機上配對的方式只在 Wi-Fi 下能用。要在 4G/5G 也能改位置，在 Mac 上跑一次 WanderLine 的 ios/make_pairing_mac.sh，把產生的配對檔用 AirDrop 傳到手機，再從這裡匯入。")
+                    Text("一般不需要：上面的「配對這支 iPhone」在手機上就能完成。這裡是給已經有配對檔的人用的。")
                 }
 
                 Section {} footer: {
@@ -130,7 +130,7 @@ struct SetupScreen: View {
 
     private var pairingText: String {
         guard canPairOnPhone else {
-            return "這支手機的 iOS 版本不能在手機上配對，請用最下面的「匯入電腦配對檔」。"
+            return "這支手機的 iOS 版本不能在手機上配對，請用最下面的「匯入配對檔」。"
         }
         switch pairing.phase {
         case .idle, .failed:

@@ -430,7 +430,7 @@ enum PairingStore {
         let data = try Data(contentsOf: source)
         if (try? save(data)) != nil { return "已匯入手機配對檔" }
         try LockdownStore.save(data)
-        return "已匯入電腦配對檔：之後 4G 也能改位置"
+        return "已匯入配對檔"
     }
 
     static func remove() {
