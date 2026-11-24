@@ -2,6 +2,7 @@
 // 路徑：本機 VPN（10.7.0.1）→ RPPairing 配對檔建立開發者通道 → 沒掛開發者映像檔就自動掛 → RemoteServer → LocationSimulation
 import Foundation
 import Network
+import Security
 import IDevice
 
 struct LinkError: LocalizedError {
@@ -294,12 +295,24 @@ enum PairingPort {
 }
 
 /// RPPairing 配對檔存在 App 的「文件」資料夾
+/// 配對檔：存在 App 的 Documents，另外備份一份到鑰匙圈。
+/// 鑰匙圈在 App 被刪掉重裝後還在，所以重裝也不用重新配對。
 enum PairingStore {
     static var docs: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     static var url: URL { docs.appendingPathComponent("rppairing.plist") }
 
-    static func load() -> Data? { try? Data(contentsOf: url) }
-    static var exists: Bool { FileManager.default.fileExists(atPath: url.path) }
+    static func load() -> Data? {
+        if let d = try? Data(contentsOf: url) {
+            if Keychain.read() == nil { Keychain.write(d) }   // 舊版存的，補一份到鑰匙圈
+            return d
+        }
+        if let d = Keychain.read() {                           // 重裝後：從鑰匙圈拿回來
+            try? d.write(to: url, options: .atomic)
+            return d
+        }
+        return nil
+    }
+    static var exists: Bool { FileManager.default.fileExists(atPath: url.path) || Keychain.read() != nil }
 
     /// 先用 idevice 讀一次，確定是 RPPairing 配對檔才存
     static func save(_ data: Data) throws {
@@ -314,6 +327,7 @@ enum PairingStore {
         }
         rp_pairing_file_free(handle)
         try data.write(to: url, options: .atomic)
+        Keychain.write(data)
     }
 
     static func save(from source: URL) throws {
@@ -324,5 +338,30 @@ enum PairingStore {
 
     static func remove() {
         try? FileManager.default.removeItem(at: url)
+        Keychain.delete()
+    }
+
+    /// 只存在這支手機（不跟 iCloud 同步），開機解鎖一次後背景也讀得到
+    private enum Keychain {
+        static let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "wang.chunchieh.wanderline.rppairing",
+            kSecAttrAccount as String: "rppairing",
+        ]
+        static func read() -> Data? {
+            var q = query
+            q[kSecReturnData as String] = true
+            q[kSecMatchLimit as String] = kSecMatchLimitOne
+            var out: CFTypeRef?
+            return SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess ? out as? Data : nil
+        }
+        static func write(_ data: Data) {
+            SecItemDelete(query as CFDictionary)
+            var q = query
+            q[kSecValueData as String] = data
+            q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            SecItemAdd(q as CFDictionary, nil)
+        }
+        static func delete() { SecItemDelete(query as CFDictionary) }
     }
 }
