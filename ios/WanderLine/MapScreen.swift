@@ -39,6 +39,7 @@ struct MapScreen: View {
     @State private var mapProxy: MapProxy?
     @State private var pendingCenter: CLLocationCoordinate2D?
     @State private var lastRegion: MKCoordinateRegion?
+    @State private var menuOpen = false          // 右下角 ☰ 展開的那一排按鈕
 
     private var mode: WalkMode { WalkMode(rawValue: modeRaw) ?? .once }
     private var path: [CLLocationCoordinate2D] {
@@ -58,7 +59,14 @@ struct MapScreen: View {
             .padding(.horizontal, 12)
             .padding(.top, 6)
         }
-        .overlay(alignment: .bottomTrailing) { locateButton }
+        .overlay {
+            // 選單打開時，點地圖其他地方就收起來
+            if menuOpen {
+                Color.black.opacity(0.001).ignoresSafeArea()
+                    .onTapGesture { withAnimation(.snappy) { menuOpen = false } }
+            }
+        }
+        .overlay(alignment: .bottomTrailing) { floatingButtons }
         .safeAreaInset(edge: .bottom) {
             panel.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { panelFrame = $0 }
         }
@@ -119,23 +127,72 @@ struct MapScreen: View {
     }
 
     /// 右下角的圓形按鈕：地圖回到手機目前的位置（在改位置時就是假位置）
-    private var locateButton: some View {
-        Button {
-            if let c = CLLocationManager().location?.coordinate {
-                center(on: c, meters: nil)
-            } else {
-                withAnimation { camera = .userLocation(fallback: camera) }
+    /// 右下角：☰ 按下去往上浮出「停止模擬」「設定」；「回到目前位置」最常用，一直留在外面
+    private var floatingButtons: some View {
+        VStack(alignment: .trailing, spacing: 12) {
+            if menuOpen {
+                // 不鎖住：App 被關掉重開後，手機可能還停在假位置，這時也要能按
+                menuItem(engine.position != nil ? "停止模擬（現在是假位置）" : "停止模擬", icon: "location.slash.fill", tint: .orange) {
+                    Task { await engine.restore() }
+                }
+                menuItem("設定", icon: "gearshape.fill", tint: .primary) { showSetup = true }
             }
-        } label: {
-            Image(systemName: "location.fill")
+            roundButton(menuOpen ? "xmark" : "line.3.horizontal", label: menuOpen ? "收起選單" : "更多") {
+                withAnimation(.snappy) { menuOpen.toggle() }
+            }
+            .overlay(alignment: .topTrailing) {
+                // 正在用假位置：小紅點提醒（「停止模擬」在選單裡）
+                if engine.position != nil && !menuOpen {
+                    Circle().fill(.red).frame(width: 11, height: 11)
+                        .overlay(Circle().stroke(.white, lineWidth: 2))
+                        .offset(x: 1, y: -1)
+                }
+            }
+            roundButton("location.fill", label: "回到目前位置") {
+                if let c = CLLocationManager().location?.coordinate {
+                    center(on: c, meters: nil)
+                } else {
+                    withAnimation { camera = .userLocation(fallback: camera) }
+                }
+            }
+        }
+        .padding(.trailing, 14)
+        .padding(.bottom, 10)
+    }
+
+    private func roundButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
                 .font(.system(size: 18, weight: .semibold))
                 .frame(width: 48, height: 48)
                 .background(.regularMaterial, in: Circle())
                 .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
         }
-        .accessibilityLabel("回到目前位置")
-        .padding(.trailing, 14)
-        .padding(.bottom, 10)
+        .accessibilityLabel(label)
+    }
+
+    /// 選單裡的一項：左邊字、右邊圓形圖示，按了就收起選單
+    private func menuItem(_ title: String, icon: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button {
+            withAnimation(.snappy) { menuOpen = false }
+            action()
+        } label: {
+            HStack(spacing: 10) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(.regularMaterial, in: Capsule())
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+            .padding(.trailing, 2)
+        }
+        .buttonStyle(.plain)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private func waypointDot(_ i: Int) -> some View {
@@ -169,11 +226,6 @@ struct MapScreen: View {
             }
             .padding(10)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-            Button { showSetup = true } label: {
-                Image(systemName: "gearshape.fill")
-                    .padding(11)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-            }
         }
     }
 
@@ -307,22 +359,6 @@ struct MapScreen: View {
             .pickerStyle(.segmented)
 
             if tab == .point { pointPanel } else { routePanel }
-
-            HStack {
-                Circle().fill(engine.position != nil ? Color.green : Color.secondary).frame(width: 8, height: 8)
-                Text(engine.position.map { String(format: "目前假位置 %.5f, %.5f", $0.latitude, $0.longitude) } ?? "現在是真實位置")
-                    .font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                // 不鎖住：App 被關掉重開後，手機可能還停在假位置，這時也要能按
-                Button { Task { await engine.restore() } } label: {
-                    Label("停止模擬", systemImage: "location.slash.fill")
-                        .font(.caption.weight(.semibold))
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .tint(.orange)
-                .controlSize(.small)
-            }
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
