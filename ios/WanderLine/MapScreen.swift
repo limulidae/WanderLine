@@ -32,6 +32,13 @@ struct MapScreen: View {
     @State private var showGPX = false
     @State private var showSave = false
     @State private var saveName = ""
+    // 讓地點出現在「看得到的地圖」正中央（扣掉上面搜尋列、下面面板）
+    @State private var mapFrame: CGRect = .zero
+    @State private var searchFrame: CGRect = .zero
+    @State private var panelFrame: CGRect = .zero
+    @State private var mapProxy: MapProxy?
+    @State private var pendingCenter: CLLocationCoordinate2D?
+    @State private var lastRegion: MKCoordinateRegion?
 
     private var mode: WalkMode { WalkMode(rawValue: modeRaw) ?? .once }
     private var path: [CLLocationCoordinate2D] {
@@ -44,6 +51,7 @@ struct MapScreen: View {
             map
             VStack(spacing: 8) {
                 searchBar
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { searchFrame = $0 }
                 if !results.isEmpty { resultList }
                 if let err = engine.lastError { errorBanner(err) }
             }
@@ -51,7 +59,9 @@ struct MapScreen: View {
             .padding(.top, 6)
         }
         .overlay(alignment: .bottomTrailing) { locateButton }
-        .safeAreaInset(edge: .bottom) { panel }
+        .safeAreaInset(edge: .bottom) {
+            panel.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { panelFrame = $0 }
+        }
         .sheet(isPresented: $showSetup) { SetupScreen() }
         .fileImporter(isPresented: $showGPX, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
             if case .success(let url) = r { importGPX(url) }
@@ -91,6 +101,9 @@ struct MapScreen: View {
                 }
             }
             .mapControls { MapCompass(); MapScaleView() }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { mapFrame = $0 }
+            .onAppear { mapProxy = proxy }
+            .onMapCameraChange(frequency: .onEnd) { ctx in nudgeIntoView(ctx.region) }
             .onTapGesture { pt in
                 guard let c = proxy.convert(pt, from: .local) else { return }
                 results = []
@@ -108,7 +121,11 @@ struct MapScreen: View {
     /// 右下角的圓形按鈕：地圖回到手機目前的位置（在改位置時就是假位置）
     private var locateButton: some View {
         Button {
-            withAnimation { camera = .userLocation(fallback: camera) }
+            if let c = CLLocationManager().location?.coordinate {
+                center(on: c, meters: nil)
+            } else {
+                withAnimation { camera = .userLocation(fallback: camera) }
+            }
         } label: {
             Image(systemName: "location.fill")
                 .font(.system(size: 18, weight: .semibold))
@@ -164,7 +181,7 @@ struct MapScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(results.prefix(6), id: \.self) { item in
                 Button {
-                    go(to: item.placemark.coordinate)
+                    goAfterKeyboard(item.placemark.coordinate)
                     results = []
                 } label: {
                     VStack(alignment: .leading, spacing: 2) {
@@ -196,9 +213,9 @@ struct MapScreen: View {
     private func search() {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
-        let parts = q.split(whereSeparator: { $0 == "," || $0 == " " }).compactMap { Double($0) }
-        if parts.count == 2, abs(parts[0]) <= 90, abs(parts[1]) <= 180 {
-            go(to: CLLocationCoordinate2D(latitude: parts[0], longitude: parts[1]))
+        if let c = Self.parseCoordinate(q) {
+            results = []
+            goAfterKeyboard(c)
             return
         }
         let req = MKLocalSearch.Request()
@@ -208,9 +225,76 @@ struct MapScreen: View {
         }
     }
 
+    /// 收起鍵盤（下面的面板會跟著降回去）再移地圖，正中央才算得準
+    private func goAfterKeyboard(_ c: CLLocationCoordinate2D) {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { go(to: c) }
+    }
+
     private func go(to c: CLLocationCoordinate2D) {
-        withAnimation { camera = .region(MKCoordinateRegion(center: c, latitudinalMeters: 600, longitudinalMeters: 600)) }
+        center(on: c, meters: 600)
         if tab == .point { picked = c }
+    }
+
+    /// 把地圖移到 c，並讓 c 落在「看得到的地圖」正中央：先跳過去，等地圖停好再微調，
+    /// 不管地圖有沒有延伸到面板後面都準。meters = nil 表示保持目前的縮放。
+    private func center(on c: CLLocationCoordinate2D, meters: Double?) {
+        pendingCenter = c
+        if let meters {
+            camera = .region(MKCoordinateRegion(center: c, latitudinalMeters: meters, longitudinalMeters: meters))
+        } else if let r = lastRegion {
+            camera = .region(MKCoordinateRegion(center: c, span: r.span))
+        } else {
+            camera = .region(MKCoordinateRegion(center: c, latitudinalMeters: 1200, longitudinalMeters: 1200))
+        }
+    }
+
+    private func nudgeIntoView(_ region: MKCoordinateRegion) {
+        lastRegion = region
+        guard let c = pendingCenter else { return }
+        pendingCenter = nil
+        guard let proxy = mapProxy, mapFrame.height > 0, let pt = proxy.convert(c, to: .local) else { return }
+        let top = max(mapFrame.minY, searchFrame.maxY) - mapFrame.minY
+        let bottom = (panelFrame.height > 0 ? min(mapFrame.maxY, panelFrame.minY) : mapFrame.maxY) - mapFrame.minY
+        let dy = (top + bottom) / 2 - pt.y
+        let dx = mapFrame.width / 2 - pt.x
+        guard abs(dy) > 4 || abs(dx) > 4 else { return }
+        let latPerPt = region.span.latitudeDelta / mapFrame.height
+        let lonPerPt = region.span.longitudeDelta / mapFrame.width
+        let newCenter = CLLocationCoordinate2D(latitude: region.center.latitude + dy * latPerPt,
+                                               longitude: region.center.longitude - dx * lonPerPt)
+        withAnimation(.easeOut(duration: 0.25)) {
+            camera = .region(MKCoordinateRegion(center: newCenter, span: region.span))
+        }
+    }
+
+    /// 看得懂的座標寫法：「25.060106, 121.582061」「25.06，121.58」（全形逗號）、「25.06 121.58」、
+    /// 「25.06°N 121.58°E」、「N25.06 E121.58」、Google 地圖網址裡的「@25.06,121.58,17z」「q=25.06,121.58」
+    static func parseCoordinate(_ raw: String) -> CLLocationCoordinate2D? {
+        var s = raw
+        for (a, b) in [("，", ","), ("、", ","), ("　", " "), ("．", "."), ("－", "-"), ("°", " "), ("º", " ")] {
+            s = s.replacingOccurrences(of: a, with: b)
+        }
+        // 網址：取 @ 或 q= / ll= / query= 後面的兩個數字
+        if let r = s.range(of: #"(@|[?&](q|ll|query|center)=)(-?\d+(\.\d+)?),\s*(-?\d+(\.\d+)?)"#, options: .regularExpression) {
+            s = String(s[r]).replacingOccurrences(of: #"^(@|[?&](q|ll|query|center)=)"#, with: "", options: .regularExpression)
+        } else if s.contains("://") {
+            return nil
+        }
+        let upper = s.uppercased()
+        // 只能有數字、正負號、小數點、逗號、空白和 N/S/E/W，其他字（地名）就交給地點搜尋
+        guard upper.range(of: #"^[\d\s.,+\-NSEW]+$"#, options: .regularExpression) != nil else { return nil }
+        let nums = upper.matches(of: /-?\d+(?:\.\d+)?/).compactMap { Double($0.output) }
+        guard nums.count == 2 else { return nil }
+        var lat = nums[0], lon = nums[1]
+        // 寫成「121.5 E 25.0 N」這種經度在前的
+        if let ei = upper.firstIndex(where: { $0 == "E" || $0 == "W" }), let ni = upper.firstIndex(where: { $0 == "N" || $0 == "S" }), ei < ni {
+            swap(&lat, &lon)
+        }
+        if upper.contains("S") { lat = -abs(lat) }
+        if upper.contains("W") { lon = -abs(lon) }
+        guard abs(lat) <= 90, abs(lon) <= 180 else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
     }
 
     // MARK: - 下方面板
