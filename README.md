@@ -18,7 +18,7 @@
 打包流程：
 - push 到 main 時，Xcode Cloud（workflow「TestFlight」）會跑 `ios/ci_scripts/ci_post_clone.sh`：裝 XcodeGen、下載 idevice 程式庫、產生專案，再打包上傳到 TestFlight 內部測試。簽名由蘋果代管。
 - TestFlight 只走 Xcode Cloud（GitHub 的 TestFlight 打包已在 2026-11-24 移除）。
-- 網址安裝版：Xcode Cloud 每次打包都會順便匯出 Ad Hoc 版（只能裝在帳號登記過的手機）。用 `publish_adhoc.py`（在 Claude 的工作資料夾）把它放到 `gh-pages` 分支，網址 https://limulidae.github.io/WanderLine/ 。GitHub 不再打包、也不存蘋果金鑰。**不要撤銷任何憑證**。
+- 網址安裝版：Xcode Cloud 每次打包都會順便匯出 Ad Hoc 版（只能裝在帳號登記過的手機）。用 `tools/publish_adhoc.py`把它放到 `gh-pages` 分支，網址 https://limulidae.github.io/WanderLine/ 。GitHub 不再打包、也不存蘋果金鑰。**不要撤銷任何憑證**。
 - 自己的 Mac：`bash ios/setup_mac.sh` 會產生專案並打開 Xcode。
 
 改位置的方法：
