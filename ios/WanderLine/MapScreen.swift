@@ -40,6 +40,7 @@ struct MapScreen: View {
     @State private var pendingCenter: CLLocationCoordinate2D?
     @State private var lastRegion: MKCoordinateRegion?
     @State private var menuOpen = false          // 右下角 ☰ 展開的那一排按鈕
+    @State private var locationManager = CLLocationManager()   // 要先問過位置權限，地圖才會畫出「目前位置」的藍點
 
     private var mode: WalkMode { WalkMode(rawValue: modeRaw) ?? .once }
     private var path: [CLLocationCoordinate2D] {
@@ -79,7 +80,10 @@ struct MapScreen: View {
             Button("存") { if !saveName.isEmpty { routes.save(name: saveName, path: path) } }
             Button("取消", role: .cancel) {}
         }
-        .onAppear { if !PairingStore.exists { showSetup = true } }
+        .onAppear {
+            if locationManager.authorizationStatus == .notDetermined { locationManager.requestWhenInUseAuthorization() }
+            if !PairingStore.exists { showSetup = true }
+        }
     }
 
     // MARK: - 地圖
