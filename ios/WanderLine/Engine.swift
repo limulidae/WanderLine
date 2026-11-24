@@ -7,7 +7,7 @@ enum WalkMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .once: return "走一次"
+        case .once: return "停止"
         case .loop: return "繞圈"
         case .back: return "來回"
         }
