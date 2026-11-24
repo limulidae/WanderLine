@@ -151,7 +151,11 @@ final class DeviceLink {
     }
 
     private func connect() throws {
-        try openTunnel()
+        do { try openTunnel() } catch {
+            DevModeStatus.report(nil)   // 連不上就不知道開發者模式現在的狀態
+            throw error
+        }
+        try checkDeveloperMode()
 
         try ensureMounted()
 
@@ -162,6 +166,24 @@ final class DeviceLink {
         if let e = check(location_simulation_new(server, &sim)) {
             drop()
             throw LinkError(title: "改位置的服務沒開起來", todo: "再試一次；還是不行就把手機重開機", tech: e)
+        }
+    }
+
+    /// 直接問手機「開發者模式」是不是開著（設定頁第 1 步用），關著就停下來告訴使用者
+    private func checkDeveloperMode() throws {
+        var lockdown: OpaquePointer?
+        guard check(lockdownd_connect_rsd(adapter, handshake, &lockdown)) == nil else { return }
+        defer { lockdownd_client_free(lockdown) }
+        var value: plist_t?
+        guard check(lockdownd_get_value(lockdown, "DeveloperModeStatus", "com.apple.security.mac.amfi", &value)) == nil,
+              let value else { return }
+        var on: UInt8 = 0
+        plist_get_bool_val(value, &on)
+        plist_free(value)
+        DevModeStatus.report(on != 0)
+        if on == 0 {
+            drop()
+            throw LinkError(title: "開發者模式沒有打開", todo: "到「設定 → 隱私權與安全性 → 開發者模式」打開，手機會重新開機")
         }
     }
 
@@ -441,4 +463,19 @@ enum Keychain {
         SecItemAdd(q as CFDictionary, nil)
     }
     static func delete(_ account: String) { SecItemDelete(query(account) as CFDictionary) }
+}
+
+/// 開發者模式的狀態：只能在連上手機的開發者服務時問到，問到就記下來（設定頁第 1 步顯示用）
+/// nil = 還沒確認（還沒連上過，或上次連線失敗）
+@MainActor
+final class DevModeStatus: ObservableObject {
+    static let shared = DevModeStatus()
+    @Published private(set) var on: Bool? = UserDefaults.standard.object(forKey: "devModeOn") as? Bool
+
+    nonisolated static func report(_ on: Bool?) {
+        Task { @MainActor in
+            shared.on = on
+            if let on { UserDefaults.standard.set(on, forKey: "devModeOn") } else { UserDefaults.standard.removeObject(forKey: "devModeOn") }
+        }
+    }
 }

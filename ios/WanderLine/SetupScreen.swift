@@ -8,6 +8,7 @@ struct SetupScreen: View {
     @ObservedObject private var pairing = PairingHost.shared
     @ObservedObject private var vpn = LoopbackVPN.shared
     @StateObject private var location = LocationAuth()
+    @ObservedObject private var devMode = DevModeStatus.shared
 
     @State private var hasPairing = PairingStore.exists
     @State private var ddiReady = DiskImage.ready
@@ -21,8 +22,7 @@ struct SetupScreen: View {
         NavigationStack {
             List {
                 Section {
-                    // 開發者模式沒有公開的檢查方法；配對要在「開發者模式」那頁做，配對好了就代表已經打開
-                    step(1, "打開「開發者模式」", hasPairing ? "已經打開了。" : "設定 → 隱私權與安全性 → 開發者模式，打開後手機會重新開機。", done: hasPairing)
+                    step(1, "打開「開發者模式」", devModeText, done: devMode.on == true)
                     step(2, "配對這支 iPhone", pairingText, done: hasPairing) { pairingControls }
                     step(3, "加入本機 VPN", "讓 WanderLine 連到這支手機自己的開發者服務。只在手機內部繞一圈，不會連到外面，也不影響上網。系統問「加入 VPN 設定」時按「允許」。", done: vpn.installed == true) {
                         if vpn.installed != true {
@@ -135,6 +135,15 @@ struct SetupScreen: View {
         let v = info?["CFBundleShortVersionString"] as? String ?? "?"
         let b = info?["CFBundleVersion"] as? String ?? "?"
         return "\(v) (\(b))"
+    }
+
+    /// 開發者模式要連上手機才問得到：每次連線（改位置、測試連線）都會重新確認
+    private var devModeText: String {
+        switch devMode.on {
+        case true?: return "已經打開（最近一次連線時確認）。"
+        case false?: return "沒有打開：設定 → 隱私權與安全性 → 開發者模式，打開後手機會重新開機。"
+        case nil: return "設定 → 隱私權與安全性 → 開發者模式，打開後手機會重新開機。做完下面幾步後按「測試連線」，這裡就會確認。"
+        }
     }
 
     // MARK: - 配對
