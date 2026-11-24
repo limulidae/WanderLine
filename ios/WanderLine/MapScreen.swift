@@ -417,6 +417,11 @@ struct MapScreen: View {
 
     private func nudgeIntoView(_ region: MKCoordinateRegion) {
         lastRegion = region
+        // 一打開地圖是「跟著目前位置」，走路線時位置每秒都在變，地圖會一直被拉回去、手指縮放不了：
+        // 第一次定位好之後就改成固定的範圍，要回到自己的位置按右下角的定位按鈕
+        if camera.followsUserLocation {
+            camera = .region(region)
+        }
         guard let c = pendingCenter else { return }
         pendingCenter = nil
         guard let proxy = mapProxy, mapFrame.height > 0, let pt = proxy.convert(c, to: .local) else { return }
