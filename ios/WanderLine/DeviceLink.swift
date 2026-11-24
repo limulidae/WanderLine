@@ -73,7 +73,9 @@ final class DeviceLink {
     }
 
     /// 只測連線（設定頁「測試連線」用）：會順便開 VPN、下載並掛上開發者映像檔
+    /// 已經連著就不重連：在 4G 下丟掉連線就連不回來（要再開飛航模式）
     func test() async throws {
+        if try await run({ self.sim != nil }) { return }
         try await prepare()
         try await run {
             self.drop()
