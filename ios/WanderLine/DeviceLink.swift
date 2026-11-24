@@ -203,31 +203,40 @@ final class DeviceLink {
         if let e = check(parseErr) { throw LinkError(step: "配對檔讀不懂，請重新配對", detail: e) }
         defer { rp_pairing_file_free(pairing) }
 
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        let port = PairingPort.resolve()
-        addr.sin_port = in_port_t(port).bigEndian
-        _ = DeviceLink.targetIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+        // 依序試：Bonjour 找到的遠端配對埠 → RSD 固定埠 58783（不用 Bonjour，4G 時靠這個）→ 常見的預設埠
+        let found = PairingPort.resolve()
+        var tries: [(UInt16, Bool)] = []          // (埠, 是不是 RemoteXPC/RSD)
+        if let found { tries.append((found, false)) }
+        tries.append((58783, true))
+        if found == nil { tries.append((PairingPort.fallback, false)) }
 
-        var newAdapter: OpaquePointer?
-        var newHandshake: OpaquePointer?
-        let tunnelErr = withUnsafePointer(to: &addr) { p in
-            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                tunnel_create_rppairing(sa, socklen_t(MemoryLayout<sockaddr_in>.size), "WanderLine", pairing, nil, nil, &newAdapter, &newHandshake)
+        var errors: [String] = []
+        for (port, viaRSD) in tries {
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = in_port_t(port).bigEndian
+            _ = DeviceLink.targetIP.withCString { inet_pton(AF_INET, $0, &addr.sin_addr) }
+
+            var newAdapter: OpaquePointer?
+            var newHandshake: OpaquePointer?
+            let tunnelErr = withUnsafePointer(to: &addr) { p in
+                p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                    viaRSD
+                        ? tunnel_create_remotexpc(sa, socklen_t(MemoryLayout<sockaddr_in>.size), "WanderLine", pairing, nil, nil, &newAdapter, &newHandshake)
+                        : tunnel_create_rppairing(sa, socklen_t(MemoryLayout<sockaddr_in>.size), "WanderLine", pairing, nil, nil, &newAdapter, &newHandshake)
+                }
             }
-        }
-        adapter = newAdapter
-        handshake = newHandshake
-        if let e = check(tunnelErr) {
+            adapter = newAdapter
+            handshake = newHandshake
+            guard let e = check(tunnelErr) else { return }
             drop()
-            // 手機的開發者服務只開在 Wi-Fi 上：只有行動網路（4G/5G）時一定連不上
-            if !DeviceLink.wifiUp() {
-                throw LinkError(step: "請先連上 Wi-Fi（或匯入電腦配對檔）", detail: "手機上配對的連線方式只在 Wi-Fi 上能用；只有 4G/5G 時，要用 Mac 產生的電腦配對檔（設定 → 匯入配對檔）。（\(e)，埠 \(port)）")
-            }
-            throw LinkError(step: "連不上手機自己（手機有解鎖嗎？配對過期的話請重新配對）", detail: "\(e)，埠 \(port)")
+            errors.append("埠 \(port)\(viaRSD ? "（RSD）" : "")：\(e)")
         }
-
+        let wifi = DeviceLink.wifiUp() ? "有 Wi-Fi" : "沒有 Wi-Fi"
+        let bonjour = found == nil ? "找不到配對服務的埠" : "配對服務在埠 \(found!)"
+        throw LinkError(step: "連不上手機自己（手機有解鎖嗎？配對過期的話請重新配對）",
+                        detail: "\(wifi)、\(bonjour)。" + errors.joined(separator: "；"))
     }
 
     /// 開發者映像檔沒掛上就掛（手機重開機後會掉）
@@ -321,7 +330,8 @@ enum PairingPort {
         var loopback = false
     }
 
-    static func resolve(timeout: TimeInterval = 5) -> UInt16 {
+    /// 找不到（例如沒有 Wi-Fi 時 Bonjour 不通）回傳 nil
+    static func resolve(timeout: TimeInterval = 5) -> UInt16? {
         let q = DispatchQueue(label: "wanderline.port")
         let sem = DispatchSemaphore(value: 0)
         let s = State()
@@ -368,9 +378,9 @@ enum PairingPort {
         }
         browser.start(queue: q)
         _ = sem.wait(timeout: .now() + timeout)
-        return q.sync { () -> UInt16 in
+        return q.sync { () -> UInt16? in
             finish()
-            return s.port ?? fallback
+            return s.port
         }
     }
 }
