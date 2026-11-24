@@ -260,6 +260,11 @@ struct MapScreen: View {
         .padding(10)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .onTapGesture { showSetup = true }
+        .contextMenu {
+            if !LinkError.lastTech.isEmpty {
+                Button("複製錯誤細節", systemImage: "doc.on.doc") { UIPasteboard.general.string = LinkError.lastTech }
+            }
+        }
     }
 
     private func search() {

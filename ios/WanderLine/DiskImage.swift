@@ -35,7 +35,7 @@ enum DiskImage {
             let url = URL(string: "https://github.com/doronz88/DeveloperDiskImage/raw/refs/heads/main/PersonalizedImages/\(folder)/\(name)")!
             let (tmp, res) = try await URLSession.shared.download(from: url)
             guard let http = res as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                throw LinkError(step: "開發者映像檔下載失敗", detail: "\(name)：伺服器回應 \((res as? HTTPURLResponse)?.statusCode ?? 0)")
+                throw LinkError(title: "開發者映像檔下載失敗", todo: "稍後再試一次", tech: "\(name)：伺服器回應 \((res as? HTTPURLResponse)?.statusCode ?? 0)")
             }
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: tmp, to: dest)

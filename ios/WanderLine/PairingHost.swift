@@ -126,7 +126,7 @@ final class PairingHost: ObservableObject {
                 detail = err.pointee.message.map { String(cString: $0) } ?? detail
                 idevice_error_free(err)
             }
-            return .failure(LinkError(step: step, detail: detail))
+            return .failure(LinkError(title: step, todo: "再試一次", tech: detail))
         }
 
         var host: OpaquePointer?
@@ -158,7 +158,7 @@ final class PairingHost: ObservableObject {
 
         // 開一個 TCP 埠等手機連進來
         let fd = Darwin.socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { return .failure(LinkError(step: "開不了網路埠", detail: String(cString: strerror(errno)))) }
+        guard fd >= 0 else { return .failure(LinkError(title: "配對沒辦法開始", todo: "再試一次", tech: String(cString: strerror(errno)))) }
         defer { Darwin.close(fd) }
         var yes: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
@@ -171,7 +171,7 @@ final class PairingHost: ObservableObject {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
         guard bound == 0, Darwin.listen(fd, 1) == 0 else {
-            return .failure(LinkError(step: "開不了網路埠", detail: String(cString: strerror(errno))))
+            return .failure(LinkError(title: "配對沒辦法開始", todo: "再試一次", tech: String(cString: strerror(errno))))
         }
         var len = socklen_t(MemoryLayout<sockaddr_in>.size)
         _ = withUnsafeMutablePointer(to: &addr) {
@@ -180,14 +180,14 @@ final class PairingHost: ObservableObject {
         let port = UInt16(bigEndian: addr.sin_port)
 
         guard ready(fd, name, port, records) else {
-            return .failure(LinkError(step: "已取消", detail: "沒有配對"))
+            return .failure(LinkError(title: "已取消配對"))
         }
 
         let conn = Darwin.accept(fd, nil, nil)
-        guard conn >= 0 else { return .failure(LinkError(step: "已取消", detail: "沒有配對")) }
+        guard conn >= 0 else { return .failure(LinkError(title: "已取消配對")) }
         defer { Darwin.close(conn) }
         guard isSameDevice(conn) else {
-            return .failure(LinkError(step: "連進來的是別台裝置", detail: "請在這支 iPhone 的「設定」裡點配對"))
+            return .failure(LinkError(title: "連進來的是別台裝置", todo: "請在這支 iPhone 的「設定」裡點配對"))
         }
 
         var peer: UnsafeMutablePointer<RpPairingPeerDeviceC>?

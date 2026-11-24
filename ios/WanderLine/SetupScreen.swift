@@ -70,6 +70,12 @@ struct SetupScreen: View {
                         Label(m.text, systemImage: m.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                             .foregroundStyle(m.ok ? .green : .orange)
                             .font(.footnote)
+                            .contextMenu {
+                                // 長按：複製技術細節（回報問題用，畫面上不顯示）
+                                if !m.ok && !LinkError.lastTech.isEmpty {
+                                    Button("複製錯誤細節", systemImage: "doc.on.doc") { UIPasteboard.general.string = LinkError.lastTech }
+                                }
+                            }
                     }
                 } footer: {
                     Text("第一次測試會順便掛上開發者映像檔，要有網路，可能要等十幾秒。")

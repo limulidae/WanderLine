@@ -6,10 +6,21 @@ import Network
 import Security
 import IDevice
 
+/// 給使用者看的錯誤：title 發生什麼事、todo 該怎麼做（都用白話）；tech 是技術細節，畫面上不顯示，
+/// 長按錯誤訊息可以複製（回報問題用）
 struct LinkError: LocalizedError {
-    let step: String
-    let detail: String
-    var errorDescription: String? { "\(step)：\(detail)" }
+    let title: String
+    var todo: String? = nil
+    var tech: String? = nil
+    var errorDescription: String? { todo.map { "\(title)
+\($0)" } ?? title }
+
+    /// 最近一次錯誤的技術細節
+    nonisolated(unsafe) static var lastTech = ""
+    init(title: String, todo: String? = nil, tech: String? = nil) {
+        self.title = title; self.todo = todo; self.tech = tech
+        if let tech { LinkError.lastTech = "\(title)：\(tech)"; NSLog("WanderLine: %@：%@", title, tech) }
+    }
 }
 
 /// 所有 idevice 呼叫都在同一條序列佇列上（它的 handle 不能跨執行緒同時用）
@@ -48,11 +59,11 @@ final class DeviceLink {
         try await run {
             self.drop()
             do { try self.connect() } catch let e as LinkError {
-                throw LinkError(step: e.step, detail: e.detail + "（重新連線前，原本的連線：\(fastError ?? "")）")
+                throw LinkError(title: e.title, todo: e.todo, tech: (e.tech ?? "") + "；原本的連線：\(fastError ?? "")")
             }
             if let e = self.check(location_simulation_set(self.sim, lat, lng)) {
                 self.drop()
-                throw LinkError(step: "改位置失敗", detail: e)
+                throw LinkError(title: "位置沒改成功", todo: "再按一次試試；還是不行就把 WanderLine 關掉重開", tech: e)
             }
         }
     }
@@ -63,7 +74,7 @@ final class DeviceLink {
             // 還原後連線留著：用 4G 時重新連線要先開飛航模式，留著下次改位置就不用再弄一次
             if let e = self.check(location_simulation_clear(sim)) {
                 self.drop()
-                throw LinkError(step: "還原失敗", detail: e)
+                throw LinkError(title: "沒能改回真實位置", todo: "再按一次「停止模擬」", tech: e)
             }
         }
     }
@@ -88,12 +99,12 @@ final class DeviceLink {
     /// 需要等使用者或網路的準備工作（不在 idevice 佇列上做）
     private func prepare() async throws {
         guard PairingStore.exists else {
-            throw LinkError(step: "還沒配對", detail: "到「設定」按「開始配對」")
+            throw LinkError(title: "還沒配對", todo: "到 ☰ →「設定」按「開始配對」")
         }
         try await LoopbackVPN.shared.ensureOn()
         if !DiskImage.ready {
             do { try await DiskImage.download() } catch let e as LinkError { throw e } catch {
-                throw LinkError(step: "開發者映像檔下載失敗", detail: "要有網路（\(error.localizedDescription)）")
+                throw LinkError(title: "開發者映像檔下載失敗", todo: "要有網路，連上網路後再試一次", tech: error.localizedDescription)
             }
         }
     }
@@ -147,24 +158,24 @@ final class DeviceLink {
 
         if let e = check(remote_server_connect_rsd(adapter, handshake, &server)) {
             drop()
-            throw LinkError(step: "開發者服務打不開（「開發者模式」有打開嗎？）", detail: e)
+            throw LinkError(title: "連不上手機的開發者服務", todo: "確認「設定 → 隱私權與安全性 → 開發者模式」是打開的，再試一次", tech: e)
         }
         if let e = check(location_simulation_new(server, &sim)) {
             drop()
-            throw LinkError(step: "改位置服務打不開", detail: e)
+            throw LinkError(title: "改位置的服務沒開起來", todo: "再試一次；還是不行就把手機重開機", tech: e)
         }
     }
 
     /// 手機上配對的 RPPairing 配對檔 → 開發者通道
     private func openTunnel() throws {
         guard let data = PairingStore.load() else {
-            throw LinkError(step: "還沒配對", detail: "到「設定」按「開始配對」")
+            throw LinkError(title: "還沒配對", todo: "到 ☰ →「設定」按「開始配對」")
         }
         var pairing: OpaquePointer?
         let parseErr = data.withUnsafeBytes { raw in
             rp_pairing_file_from_bytes(raw.bindMemory(to: UInt8.self).baseAddress, UInt(data.count), &pairing)
         }
-        if let e = check(parseErr) { throw LinkError(step: "配對檔讀不懂，請重新配對", detail: e) }
+        if let e = check(parseErr) { throw LinkError(title: "配對資料壞了", todo: "到 ☰ →「設定」重新配對", tech: e) }
         defer { rp_pairing_file_free(pairing) }
 
         // 依序試：Bonjour 找到的遠端配對埠 → RSD 固定埠 58783（不用 Bonjour，4G 時靠這個）→ 常見的預設埠
@@ -200,11 +211,15 @@ final class DeviceLink {
         let bonjour = found == nil ? "找不到配對服務的埠" : "配對服務在埠 \(found!)"
         // 正在用 4G/5G 時，iPhone 會擋住新的開發者連線；先在飛航模式（或 Wi-Fi）連上，之後切回 4G 連線會留著
         if !DeviceLink.wifiUp() {
-            throw LinkError(step: "用 4G/5G 時要先開一下飛航模式",
-                            detail: "iPhone 在用行動網路時不讓 WanderLine 連線。請：① 打開飛航模式 ② 再按一次「移到這裡」 ③ 改好後關掉飛航模式，之後就能一直用。（\(bonjour)。" + errors.joined(separator: "；") + "）")
+            throw LinkError(title: "用 4G 時連不上",
+                            todo: "① 打開飛航模式
+② 再按一次「移到這裡」
+③ 位置改好後關掉飛航模式",
+                            tech: bonjour + "。" + errors.joined(separator: "；"))
         }
-        throw LinkError(step: "連不上手機自己（手機有解鎖嗎？配對過期的話請重新配對）",
-                        detail: "有 Wi-Fi、\(bonjour)。" + errors.joined(separator: "；"))
+        throw LinkError(title: "連不上",
+                        todo: "確認手機已解鎖再試一次；還是不行就到 ☰ →「設定」重新配對",
+                        tech: "有 Wi-Fi、" + bonjour + "。" + errors.joined(separator: "；"))
     }
 
     /// 開發者映像檔沒掛上就掛（手機重開機後會掉）
@@ -218,11 +233,11 @@ final class DeviceLink {
                 var assets: OpaquePointer?
                 if let e = check(cryptex1_assets_load(DiskImage.dir.path, &assets)) {
                     DiskImage.reset()
-                    drop(); throw LinkError(step: "開發者映像檔壞了，下次會重新下載", detail: e)
+                    drop(); throw LinkError(title: "開發者映像檔壞了", todo: "再試一次，會自動重新下載", tech: e)
                 }
                 defer { cryptex1_assets_free(assets) }
                 if let e = check(cryptexd_install_ddi(adapter, handshake, assets, nil)) {
-                    drop(); throw LinkError(step: "開發者映像檔掛不上（要有網路，蘋果要簽名）", detail: e)
+                    drop(); throw LinkError(title: "開發者映像檔掛不上", todo: "要有網路（蘋果要線上確認），連上網路後再試一次", tech: e)
                 }
                 return
             }
@@ -231,7 +246,7 @@ final class DeviceLink {
 
         var mounter: OpaquePointer?
         if let e = check(image_mounter_connect_rsd(adapter, handshake, &mounter)) {
-            drop(); throw LinkError(step: "連不上映像檔服務", detail: e)
+            drop(); throw LinkError(title: "開發者映像檔服務沒回應", todo: "再試一次；還是不行就把手機重開機", tech: e)
         }
         defer { image_mounter_free(mounter) }
 
@@ -252,13 +267,13 @@ final class DeviceLink {
               let trust = try? Data(contentsOf: d.appendingPathComponent("Image.dmg.trustcache")),
               let manifest = try? Data(contentsOf: d.appendingPathComponent("BuildManifest.plist")) else {
             DiskImage.reset()
-            drop(); throw LinkError(step: "開發者映像檔不見了", detail: "下次連線會重新下載")
+            drop(); throw LinkError(title: "開發者映像檔不見了", todo: "再試一次，會自動重新下載")
         }
 
         // 要先問晶片 ID 才能請蘋果簽名
         var lockdown: OpaquePointer?
         if let e = check(lockdownd_connect_rsd(adapter, handshake, &lockdown)) {
-            drop(); throw LinkError(step: "讀不到手機資訊", detail: e)
+            drop(); throw LinkError(title: "讀不到手機資訊", todo: "再試一次", tech: e)
         }
         var chipPlist: plist_t?
         let chipErr = check(lockdownd_get_value(lockdown, "UniqueChipID", nil, &chipPlist))
@@ -266,7 +281,7 @@ final class DeviceLink {
         var chipID: UInt64 = 0
         if let chipPlist { plist_get_uint_val(chipPlist, &chipID); plist_free(chipPlist) }
         if chipErr != nil || chipID == 0 {
-            drop(); throw LinkError(step: "讀不到手機晶片 ID", detail: chipErr ?? "空的")
+            drop(); throw LinkError(title: "讀不到手機資訊", todo: "再試一次", tech: "晶片 ID：" + (chipErr ?? "空的"))
         }
 
         let err = image.withUnsafeBytes { i in
@@ -282,7 +297,7 @@ final class DeviceLink {
             }
         }
         if let e = check(err) {
-            drop(); throw LinkError(step: "開發者映像檔掛不上（要有網路，蘋果要簽名）", detail: e)
+            drop(); throw LinkError(title: "開發者映像檔掛不上", todo: "要有網路（蘋果要線上確認），連上網路後再試一次", tech: e)
         }
     }
 }
@@ -383,7 +398,7 @@ enum PairingStore {
         if let err {
             let msg = err.pointee.message.map { String(cString: $0) } ?? ""
             idevice_error_free(err)
-            throw LinkError(step: "這不是 RPPairing 配對檔", detail: msg)
+            throw LinkError(title: "這不是 WanderLine 的配對檔", todo: "請改用「配對這支 iPhone」在手機上配對", tech: msg)
         }
         rp_pairing_file_free(handle)
         try data.write(to: url, options: .atomic)

@@ -32,7 +32,7 @@ final class LoopbackVPN: ObservableObject {
             }
         } catch {
             installed = false
-            throw LinkError(step: "本機 VPN 沒有加入", detail: "系統問「加入 VPN 設定」時要按「允許」（\(error.localizedDescription)）")
+            throw LinkError(title: "還沒加入 VPN", todo: "再按一次，系統問「加入 VPN 設定」時按「允許」", tech: error.localizedDescription)
         }
         installed = true
         watch(m)
@@ -46,14 +46,14 @@ final class LoopbackVPN: ObservableObject {
         if m.connection.status == .connected { connected = true; return }
         if m.connection.status != .connecting {
             do { try m.connection.startVPNTunnel() } catch {
-                throw LinkError(step: "本機 VPN 開不起來", detail: error.localizedDescription)
+                throw LinkError(title: "VPN 開不起來", todo: "到「設定 → VPN」確認 WanderLine 是打開的，再試一次", tech: error.localizedDescription)
             }
         }
         for _ in 0..<40 {
             if m.connection.status == .connected { connected = true; return }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
-        throw LinkError(step: "本機 VPN 開不起來", detail: "到「設定 → VPN」看 WanderLine 是不是被關掉了")
+        throw LinkError(title: "VPN 開不起來", todo: "到「設定 → VPN」確認 WanderLine 是打開的，再試一次")
     }
 
     // MARK: - 內部
