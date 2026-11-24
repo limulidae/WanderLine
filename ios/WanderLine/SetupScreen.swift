@@ -7,7 +7,7 @@ struct SetupScreen: View {
     @ObservedObject private var pairing = PairingHost.shared
     @ObservedObject private var vpn = LoopbackVPN.shared
 
-    @State private var hasPairing = (PairingStore.exists || LockdownStore.exists)
+    @State private var hasPairing = PairingStore.exists
     @State private var ddiReady = DiskImage.ready
     @State private var ddiProgress: Double?
     @State private var vpnBusy = false
@@ -80,7 +80,6 @@ struct SetupScreen: View {
                     if hasPairing {
                         Button("刪除配對檔", role: .destructive) {
                             PairingStore.remove()
-                            LockdownStore.remove()
                             hasPairing = false
                             pairing.reset()
                         }
@@ -104,12 +103,12 @@ struct SetupScreen: View {
                     } catch {
                         message = (false, error.localizedDescription)
                     }
-                    hasPairing = (PairingStore.exists || LockdownStore.exists)
+                    hasPairing = PairingStore.exists
                 }
             }
             .task { await vpn.refresh() }
             .onChange(of: pairing.phase) { _, phase in
-                if phase == .done { hasPairing = (PairingStore.exists || LockdownStore.exists) }
+                if phase == .done { hasPairing = PairingStore.exists }
             }
         }
     }

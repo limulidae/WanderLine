@@ -79,7 +79,7 @@ struct MapScreen: View {
             Button("存") { if !saveName.isEmpty { routes.save(name: saveName, path: path) } }
             Button("取消", role: .cancel) {}
         }
-        .onAppear { if !PairingStore.exists && !LockdownStore.exists { showSetup = true } }
+        .onAppear { if !PairingStore.exists { showSetup = true } }
     }
 
     // MARK: - 地圖
