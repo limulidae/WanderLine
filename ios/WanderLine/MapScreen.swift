@@ -16,6 +16,7 @@ struct MapScreen: View {
     @State private var showFavName = false
     @State private var favName = ""
     @State private var renaming: Favorite?          // 正在改名的收藏
+    @State private var showFavorites = false        // ☰ →「收藏的地點」
     @State private var renameText = ""
     @AppStorage("speedKmh") private var speed = 4.5
     @AppStorage("snapToStreets") private var snapToStreets = true
@@ -60,11 +61,7 @@ struct MapScreen: View {
             VStack(spacing: 8) {
                 searchBar
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { searchFrame = $0 }
-                if !results.isEmpty {
-                    resultList
-                } else if searchFocused && query.isEmpty && !favorites.items.isEmpty {
-                    favoriteList
-                }
+                if !results.isEmpty { resultList }
                 if let err = engine.lastError { errorBanner(err) }
             }
             .padding(.horizontal, 12)
@@ -82,10 +79,11 @@ struct MapScreen: View {
             panel.onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { panelFrame = $0 }
         }
         .sheet(isPresented: $showSetup) { SetupScreen() }
+        .sheet(isPresented: $showFavorites) { favoritesSheet }
         .fileImporter(isPresented: $showGPX, allowedContentTypes: [UTType(filenameExtension: "gpx") ?? .xml, .xml, .data]) { r in
             if case .success(let url) = r { importGPX(url) }
         }
-        .alert("幫收藏改名", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+        .alert("幫收藏改名", isPresented: Binding(get: { renaming != nil && !showFavorites }, set: { if !$0 { renaming = nil } })) {
             TextField("名字", text: $renameText)
             Button("儲存") { if let f = renaming { favorites.rename(f, to: renameText) }; renaming = nil }
             Button("取消", role: .cancel) { renaming = nil }
@@ -172,6 +170,7 @@ struct MapScreen: View {
                     Task { await engine.restore() }
                 }
                 menuItem("設定", icon: "gearshape.fill", tint: .primary) { showSetup = true }
+                menuItem("收藏的地點", icon: "star.fill", tint: .yellow) { showFavorites = true }
             }
             roundButton(menuOpen ? "xmark" : "line.3.horizontal", label: menuOpen ? "收起選單" : "更多") {
                 withAnimation(.snappy) { menuOpen.toggle() }
@@ -266,39 +265,50 @@ struct MapScreen: View {
         }
     }
 
-    /// 點搜尋列（還沒打字）時列出收藏；按一下就跳過去並選好那個點，長按可刪除
-    private var favoriteList: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("收藏").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
-            ScrollView {
-                VStack(spacing: 0) {
-                    ForEach(favorites.items) { f in
-                        Button {
-                            searchFocused = false
-                            tab = .point
-                            goAfterKeyboard(f.coordinate)
-                        } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "star.fill").foregroundStyle(.yellow)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(f.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                                    Text(String(format: "%.5f, %.5f", f.lat, f.lon)).font(.caption).foregroundStyle(.secondary)
+    /// ☰ →「收藏的地點」：按一下就跳過去並選好那個點；往左滑可刪除、改名
+    private var favoritesSheet: some View {
+        NavigationStack {
+            Group {
+                if favorites.items.isEmpty {
+                    ContentUnavailableView("還沒有收藏", systemImage: "star",
+                                           description: Text("在「定點」選好一個地方，按座標旁邊的 ☆ 就會收藏到這裡。"))
+                } else {
+                    List {
+                        ForEach(favorites.items) { f in
+                            Button {
+                                showFavorites = false
+                                tab = .point
+                                // 等清單收起來、面板回到原位再移地圖，正中央才算得準
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { go(to: f.coordinate) }
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: "star.fill").foregroundStyle(.yellow)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(f.name).font(.body.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
+                                        Text(String(format: "%.5f, %.5f", f.lat, f.lon)).font(.caption).foregroundStyle(.secondary)
+                                    }
                                 }
-                                Spacer()
                             }
-                            .contentShape(Rectangle())
-                            .padding(.vertical, 8).padding(.horizontal, 12)
+                            .swipeActions {
+                                Button("刪除", role: .destructive) { favorites.remove(f) }
+                                Button("改名") { startRename(f) }.tint(.blue)
+                            }
+                            .contextMenu { favoriteMenu(f) }
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu { favoriteMenu(f) }
-                        Divider()
                     }
                 }
             }
-            .frame(maxHeight: 280)
+            .navigationTitle("收藏的地點")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { showFavorites = false } } }
+            // 在清單裡改名：改名視窗要掛在這張卡片上才會出現
+            .alert("幫收藏改名", isPresented: Binding(get: { renaming != nil && showFavorites }, set: { if !$0 { renaming = nil } })) {
+                TextField("名字", text: $renameText)
+                Button("儲存") { if let f = renaming { favorites.rename(f, to: renameText) }; renaming = nil }
+                Button("取消", role: .cancel) { renaming = nil }
+            }
         }
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .presentationDetents([.medium, .large])
     }
 
     private var resultList: some View {
